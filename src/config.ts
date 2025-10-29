@@ -6,7 +6,13 @@ dotenv.config()
 const configSchema = z.object({
   PICNIC_USERNAME: z.string(),
   PICNIC_PASSWORD: z.string(),
-  PICNIC_COUNTRY_CODE: z.enum(["NL", "DE"]).default("NL"),
+  PICNIC_COUNTRY_CODE: z
+    .enum(["NL", "DE"], {
+      errorMap: () => ({
+        message: 'PICNIC_COUNTRY_CODE must be either "NL" or "DE"',
+      }),
+    })
+    .default("NL"),
   ENABLE_HTTP_SERVER: z
     .string()
     .transform((val) => val === "true")

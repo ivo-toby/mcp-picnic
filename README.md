@@ -73,14 +73,17 @@ Add this configuration:
       "args": ["-y", "mcp-picnic"],
       "env": {
         "PICNIC_USERNAME": "your-picnic-email@example.com",
-        "PICNIC_PASSWORD": "your-picnic-password"
+        "PICNIC_PASSWORD": "your-picnic-password",
+        "PICNIC_COUNTRY_CODE": "NL"
       }
     }
   }
 }
 ```
 
-**Important**: Replace `your-picnic-email@example.com` and `your-picnic-password` with your actual Picnic account credentials.
+**Important**: 
+- Replace `your-picnic-email@example.com` and `your-picnic-password` with your actual Picnic account credentials.
+- Set `PICNIC_COUNTRY_CODE` to your country: `"NL"` for Netherlands or `"DE"` for Germany (defaults to `"NL"` if not specified).
 
 3. **Restart Claude Desktop** completely
 
@@ -367,14 +370,17 @@ PICNIC_API_VERSION=15
       "args": ["-y", "mcp-picnic"],
       "env": {
         "PICNIC_USERNAME": "your-picnic-email@example.com",
-        "PICNIC_PASSWORD": "your-picnic-password"
+        "PICNIC_PASSWORD": "your-picnic-password",
+        "PICNIC_COUNTRY_CODE": "NL"
       }
     }
   }
 }
 ```
 
-**Important**: Replace the placeholder credentials with your actual Picnic account details.
+**Important**: 
+- Replace the placeholder credentials with your actual Picnic account details.
+- Set `PICNIC_COUNTRY_CODE` to your country: `"NL"` for Netherlands or `"DE"` for Germany (defaults to `"NL"` if not specified).
 
 **Setup Steps:**
 
@@ -399,12 +405,15 @@ Add to your Continue configuration:
       "args": ["-y", "mcp-picnic"],
       "env": {
         "PICNIC_USERNAME": "your-picnic-email@example.com",
-        "PICNIC_PASSWORD": "your-picnic-password"
+        "PICNIC_PASSWORD": "your-picnic-password",
+        "PICNIC_COUNTRY_CODE": "NL"
       }
     }
   ]
 }
 ```
+
+**Note**: Set `PICNIC_COUNTRY_CODE` to `"NL"` for Netherlands or `"DE"` for Germany (defaults to `"NL"` if not specified).
 
 ## Authentication
 
