@@ -1,4 +1,5 @@
 import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/streamableHttp.js"
+import { SSEServerTransport } from "@modelcontextprotocol/sdk/server/sse.js"
 import express, { Request, Response, NextFunction } from "express"
 import cors from "cors"
 import { isInitializeRequest } from "@modelcontextprotocol/sdk/types.js"
@@ -34,6 +35,7 @@ export class StreamableHttpServer extends BaseTransportServer {
   private options: StreamableHttpServerOptions
   private rateLimiter?: ReturnType<typeof createRateLimitMiddleware>
   private transports: Record<string, StreamableHTTPServerTransport> = {}
+  private sseTransports: Map<string, SSEServerTransport> = new Map()
   private sessionTimeouts = new Map<string, NodeJS.Timeout>()
 
   /**
@@ -250,6 +252,36 @@ export class StreamableHttpServer extends BaseTransportServer {
       this.cleanupSession(sessionId)
       res.status(204).send()
     })
+
+    // Legacy SSE transport endpoints for backwards compatibility (e.g. Home Assistant)
+    this.app.get("/sse", async (_req: Request, res: Response) => {
+      console.error("Received GET request to /sse (legacy SSE transport)")
+      const transport = new SSEServerTransport("/messages", res)
+      this.sseTransports.set(transport.sessionId, transport)
+
+      res.on("close", () => {
+        this.sseTransports.delete(transport.sessionId)
+      })
+
+      const server = this.createConfiguredServer()
+      await server.connect(transport)
+    })
+
+    this.app.post("/messages", async (req: Request, res: Response) => {
+      const sessionId = req.query.sessionId as string
+      const transport = this.sseTransports.get(sessionId)
+
+      if (!transport) {
+        res.status(400).json({
+          jsonrpc: "2.0",
+          error: { code: -32000, message: "No transport found for sessionId" },
+          id: null,
+        })
+        return
+      }
+
+      await transport.handlePostMessage(req, res, req.body)
+    })
   }
 
   /**
@@ -350,6 +382,7 @@ export class StreamableHttpServer extends BaseTransportServer {
     return new Promise((resolve) => {
       this.server = this.app.listen(this.port, () => {
         console.error(`MCP StreamableHTTP server running on http://${this.host}:${this.port}/mcp`)
+        console.error(`MCP Legacy SSE endpoint available at http://${this.host}:${this.port}/sse`)
         resolve()
       })
 
@@ -381,6 +414,16 @@ export class StreamableHttpServer extends BaseTransportServer {
         }
       }),
     )
+
+    // Clean up SSE transports
+    for (const [sessionId, transport] of this.sseTransports) {
+      try {
+        await transport.close()
+      } catch (error) {
+        ErrorUtils.logError(error, `SSE session ${sessionId} cleanup`)
+      }
+    }
+    this.sseTransports.clear()
 
     // Clean up rate limiter
     if (this.rateLimiter) {

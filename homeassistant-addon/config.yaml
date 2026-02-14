@@ -1,0 +1,23 @@
+name: "MCP Picnic"
+version: "1.0.1"
+slug: mcp_picnic
+description: "MCP server for Picnic grocery delivery - AI-powered grocery shopping"
+url: "https://github.com/ivo-toby/mcp-picnic"
+arch:
+  - amd64
+  - aarch64
+init: false
+startup: application
+boot: auto
+ports:
+  3000/tcp: 3000
+ports_description:
+  3000/tcp: "MCP SSE server"
+options:
+  picnic_username: ""
+  picnic_password: ""
+  picnic_country_code: "NL"
+schema:
+  picnic_username: str
+  picnic_password: password
+  picnic_country_code: "list(NL|DE)"
