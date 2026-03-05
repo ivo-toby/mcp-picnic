@@ -302,3 +302,6 @@ cython_debug/
 Cntfl-Readme.md
 
 **/.claude/settings.local.json
+
+# Picnic session file
+picnic-session.json

@@ -1,6 +1,6 @@
 import { z } from "zod"
 import { toolRegistry } from "./registry.js"
-import { getPicnicClient, initializePicnicClient } from "../utils/picnic-client.js"
+import { getPicnicClient, initializePicnicClient, saveSession } from "../utils/picnic-client.js"
 
 /**
  * Picnic API tools optimized for LLM consumption
@@ -810,6 +810,7 @@ toolRegistry.register({
     await ensureClientInitialized()
     const client = getPicnicClient()
     const result = await client.verify2FACode(args.code)
+    await saveSession()
     return {
       message: "2FA code verified",
       code: args.code,
