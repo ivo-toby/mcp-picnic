@@ -59,10 +59,15 @@ export async function initializePicnicClient(
     }
   }
 
-  await client.login(loginUsername, loginPassword)
+  const loginResult = await client.login(loginUsername, loginPassword)
   picnicClientInstance = client
-  await saveSession()
-  console.error("Picnic client initialized successfully.")
+
+  if (loginResult?.second_factor_authentication_required) {
+    console.error("Picnic client logged in, but 2FA is required. Use the 2FA tools to complete authentication.")
+  } else {
+    await saveSession()
+    console.error("Picnic client initialized successfully.")
+  }
 }
 
 export function getPicnicClient(): InstanceType<typeof PicnicClient> {
