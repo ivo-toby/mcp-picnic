@@ -49,7 +49,7 @@ export async function initializePicnicClient(
   if (savedAuthKey) {
     try {
       console.error("Testing saved auth key...")
-      await client.getUserInfo()
+      await client.getShoppingCart()
       picnicClientInstance = client
       console.error("Successfully reused saved session.")
       return

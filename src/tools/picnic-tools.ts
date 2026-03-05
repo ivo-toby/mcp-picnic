@@ -789,11 +789,23 @@ toolRegistry.register({
     await ensureClientInitialized()
     const client = getPicnicClient()
     const channel = args.channel || "SMS"
-    const result = await client.generate2FACode(channel)
-    return {
-      message: "2FA code generated and sent",
-      channel,
-      result,
+    try {
+      const result = await client.generate2FACode(channel)
+      return {
+        message: "2FA code generated and sent",
+        channel,
+        result,
+      }
+    } catch (error: unknown) {
+      // The Picnic API returns empty bodies for 2FA endpoints, which causes JSON parse errors
+      // but the actual request succeeds
+      if (error instanceof SyntaxError && (error as Error).message.includes("JSON")) {
+        return {
+          message: "2FA code generated and sent",
+          channel,
+        }
+      }
+      throw error
     }
   },
 })
@@ -809,12 +821,25 @@ toolRegistry.register({
   handler: async (args) => {
     await ensureClientInitialized()
     const client = getPicnicClient()
-    const result = await client.verify2FACode(args.code)
-    await saveSession()
-    return {
-      message: "2FA code verified",
-      code: args.code,
-      result,
+    try {
+      const result = await client.verify2FACode(args.code)
+      await saveSession()
+      return {
+        message: "2FA code verified",
+        code: args.code,
+        result,
+      }
+    } catch (error: unknown) {
+      // The Picnic API returns empty bodies for 2FA endpoints, which causes JSON parse errors
+      // but the actual verification succeeds
+      if (error instanceof SyntaxError && (error as Error).message.includes("JSON")) {
+        await saveSession()
+        return {
+          message: "2FA code verified",
+          code: args.code,
+        }
+      }
+      throw error
     }
   },
 })

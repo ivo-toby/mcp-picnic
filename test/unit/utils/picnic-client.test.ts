@@ -12,12 +12,12 @@ vi.mock("fs/promises", () => ({
 
 // Mock picnic-api
 const mockLogin = vi.fn()
-const mockGetUserInfo = vi.fn()
+const mockGetShoppingCart = vi.fn()
 vi.mock("picnic-api", () => {
   return {
     default: vi.fn().mockImplementation((opts: any) => ({
       login: mockLogin,
-      getUserInfo: mockGetUserInfo,
+      getShoppingCart: mockGetShoppingCart,
       authKey: opts?.authKey ?? "fresh-auth-key",
     })),
   }
@@ -48,26 +48,26 @@ describe("picnic-client session persistence", () => {
   describe("initializePicnicClient", () => {
     it("should load and reuse a valid saved session", async () => {
       vi.mocked(fs.readFile).mockResolvedValue(JSON.stringify({ authKey: "saved-key" }))
-      mockGetUserInfo.mockResolvedValue({ user: "info" })
+      mockGetShoppingCart.mockResolvedValue({ user: "info" })
 
       const { initializePicnicClient } = await importClient()
       await initializePicnicClient()
 
       expect(fs.readFile).toHaveBeenCalledWith("picnic-session.json", "utf-8")
-      expect(mockGetUserInfo).toHaveBeenCalled()
+      expect(mockGetShoppingCart).toHaveBeenCalled()
       expect(mockLogin).not.toHaveBeenCalled()
     })
 
     it("should fall back to login when saved session is invalid", async () => {
       vi.mocked(fs.readFile).mockResolvedValue(JSON.stringify({ authKey: "expired-key" }))
-      mockGetUserInfo.mockRejectedValue(new Error("Unauthorized"))
+      mockGetShoppingCart.mockRejectedValue(new Error("Unauthorized"))
       mockLogin.mockResolvedValue(undefined)
       vi.mocked(fs.writeFile).mockResolvedValue(undefined)
 
       const { initializePicnicClient } = await importClient()
       await initializePicnicClient()
 
-      expect(mockGetUserInfo).toHaveBeenCalled()
+      expect(mockGetShoppingCart).toHaveBeenCalled()
       expect(mockLogin).toHaveBeenCalledWith("test-user", "test-pass")
     })
 
@@ -80,7 +80,7 @@ describe("picnic-client session persistence", () => {
       await initializePicnicClient()
 
       expect(mockLogin).toHaveBeenCalledWith("test-user", "test-pass")
-      expect(mockGetUserInfo).not.toHaveBeenCalled()
+      expect(mockGetShoppingCart).not.toHaveBeenCalled()
     })
 
     it("should save session after fresh login", async () => {
