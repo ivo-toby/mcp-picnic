@@ -1,7 +1,11 @@
 import { z } from "zod"
+import path from "path"
+import os from "os"
 import dotenv from "dotenv"
 
 dotenv.config()
+
+const defaultSessionFile = path.join(os.homedir(), ".picnic-session.json")
 
 const configSchema = z.object({
   PICNIC_USERNAME: z.string(),
@@ -16,6 +20,7 @@ const configSchema = z.object({
     .transform((val) => parseInt(val, 10))
     .default("3000"),
   HTTP_HOST: z.string().default("localhost"),
+  PICNIC_SESSION_FILE: z.string().default(defaultSessionFile),
 })
 
 export const config = configSchema.parse(process.env)
