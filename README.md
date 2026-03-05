@@ -87,7 +87,9 @@ Add this configuration:
 
 3. **Restart Claude Desktop** completely
 
-4. **Start using it** - you should see a 🔨 hammer icon in the input area:
+4. **Complete 2FA** (if enabled on your account) - on your first conversation, ask the assistant to verify your account. It will send you a code via SMS and prompt you to enter it. See the [Authentication](#authentication) section for details.
+
+5. **Start using it** - you should see a 🔨 hammer icon in the input area:
 
 ```
 "I want to plan meals for this week and order groceries from Picnic"
@@ -444,10 +446,26 @@ Add to your Continue configuration:
 The server uses the credentials configured in your environment variables:
 
 1. **Required**: Set `PICNIC_USERNAME` and `PICNIC_PASSWORD` in your MCP configuration
-2. **2FA Support**: If 2FA is enabled on your account, the server will handle verification automatically
-3. **Session Management**: Your session will be maintained for subsequent requests
+2. **Session Persistence**: After successful authentication, your session is saved to `~/.picnic-session.json` and reused across restarts. You can customize this path with the `PICNIC_SESSION_FILE` environment variable.
 
-**Security Note**: Your credentials are only used to authenticate with Picnic's API and are not stored permanently. They are passed securely through environment variables.
+### Two-Factor Authentication (2FA)
+
+If your Picnic account has 2FA enabled, you need to complete the verification flow before you can use any shopping tools. On your first conversation after starting the server, ask the AI assistant to:
+
+1. **Generate a 2FA code**: The assistant will call `picnic_generate_2fa_code` to send a verification code to your phone via SMS
+2. **Enter the code**: Tell the assistant the code you received, and it will call `picnic_verify_2fa_code` to complete authentication
+
+Once 2FA is verified, your session is saved and you won't need to repeat this step until the session expires.
+
+**Example**:
+```
+User: "I need to verify my Picnic account"
+AI: I'll generate a 2FA code for you... A code has been sent to your phone via SMS.
+User: "The code is 123456"
+AI: Your 2FA code has been verified. You're now fully authenticated and can start shopping!
+```
+
+**Security Note**: Your credentials are only used to authenticate with Picnic's API. The session token is stored locally at `~/.picnic-session.json`. Your password is never stored on disk.
 
 ## Available Tools
 
@@ -680,10 +698,26 @@ npm link
 De server gebruikt de inloggegevens die geconfigureerd zijn in je omgevingsvariabelen:
 
 1. **Vereist**: Stel `PICNIC_USERNAME` en `PICNIC_PASSWORD` in je MCP configuratie in
-2. **2FA Ondersteuning**: Als 2FA is ingeschakeld op je account, handelt de server verificatie automatisch af
-3. **Sessiebeheer**: Je sessie wordt onderhouden voor volgende verzoeken
+2. **Sessie opslag**: Na succesvolle authenticatie wordt je sessie opgeslagen in `~/.picnic-session.json` en hergebruikt bij herstarts. Je kunt dit pad aanpassen met de `PICNIC_SESSION_FILE` omgevingsvariabele.
 
-**Beveiligingsnotitie**: Je inloggegevens worden alleen gebruikt om te authenticeren met Picnic's API en worden niet permanent opgeslagen. Ze worden veilig doorgegeven via omgevingsvariabelen.
+### Tweefactorauthenticatie (2FA)
+
+Als je Picnic-account 2FA heeft ingeschakeld, moet je de verificatie voltooien voordat je de winkeltools kunt gebruiken. Vraag bij je eerste gesprek na het starten van de server aan de AI-assistent om:
+
+1. **Een 2FA-code te genereren**: De assistent roept `picnic_generate_2fa_code` aan om een verificatiecode via SMS naar je telefoon te sturen
+2. **De code in te voeren**: Vertel de assistent de code die je hebt ontvangen, en deze roept `picnic_verify_2fa_code` aan om de authenticatie te voltooien
+
+Zodra 2FA is geverifieerd, wordt je sessie opgeslagen en hoef je deze stap niet te herhalen totdat de sessie verloopt.
+
+**Voorbeeld**:
+```
+Gebruiker: "Ik moet mijn Picnic account verifiëren"
+AI: Ik genereer een 2FA-code voor je... Er is een code naar je telefoon gestuurd via SMS.
+Gebruiker: "De code is 123456"
+AI: Je 2FA-code is geverifieerd. Je bent nu volledig geauthenticeerd en kunt beginnen met winkelen!
+```
+
+**Beveiligingsnotitie**: Je inloggegevens worden alleen gebruikt om te authenticeren met Picnic's API. Het sessietoken wordt lokaal opgeslagen in `~/.picnic-session.json`. Je wachtwoord wordt nooit op schijf opgeslagen.
 
 ## Gebruiksscenario's
 
@@ -983,10 +1017,26 @@ npm link
 Der Server verwendet die in Ihren Umgebungsvariablen konfigurierten Anmeldedaten:
 
 1. **Erforderlich**: Setzen Sie `PICNIC_USERNAME` und `PICNIC_PASSWORD` in Ihrer MCP-Konfiguration
-2. **2FA-Unterstützung**: Wenn 2FA auf Ihrem Konto aktiviert ist, handhabt der Server die Verifizierung automatisch
-3. **Sitzungsverwaltung**: Ihre Sitzung wird für nachfolgende Anfragen beibehalten
+2. **Sitzungsspeicherung**: Nach erfolgreicher Authentifizierung wird Ihre Sitzung in `~/.picnic-session.json` gespeichert und bei Neustarts wiederverwendet. Sie können diesen Pfad mit der Umgebungsvariablen `PICNIC_SESSION_FILE` anpassen.
 
-**Sicherheitshinweis**: Ihre Anmeldedaten werden nur zur Authentifizierung mit Picnics API verwendet und nicht dauerhaft gespeichert. Sie werden sicher über Umgebungsvariablen übertragen.
+### Zwei-Faktor-Authentifizierung (2FA)
+
+Wenn Ihr Picnic-Konto 2FA aktiviert hat, müssen Sie die Verifizierung abschließen, bevor Sie die Einkaufs-Tools verwenden können. Bitten Sie bei Ihrem ersten Gespräch nach dem Start des Servers den KI-Assistenten:
+
+1. **Einen 2FA-Code zu generieren**: Der Assistent ruft `picnic_generate_2fa_code` auf, um einen Verifizierungscode per SMS an Ihr Telefon zu senden
+2. **Den Code einzugeben**: Teilen Sie dem Assistenten den erhaltenen Code mit, und er ruft `picnic_verify_2fa_code` auf, um die Authentifizierung abzuschließen
+
+Sobald die 2FA verifiziert ist, wird Ihre Sitzung gespeichert und Sie müssen diesen Schritt nicht wiederholen, bis die Sitzung abläuft.
+
+**Beispiel**:
+```
+Benutzer: "Ich muss mein Picnic-Konto verifizieren"
+KI: Ich generiere einen 2FA-Code für Sie... Ein Code wurde per SMS an Ihr Telefon gesendet.
+Benutzer: "Der Code ist 123456"
+KI: Ihr 2FA-Code wurde verifiziert. Sie sind jetzt vollständig authentifiziert und können mit dem Einkaufen beginnen!
+```
+
+**Sicherheitshinweis**: Ihre Anmeldedaten werden nur zur Authentifizierung mit Picnics API verwendet. Das Sitzungstoken wird lokal unter `~/.picnic-session.json` gespeichert. Ihr Passwort wird niemals auf der Festplatte gespeichert.
 
 ## Anwendungsfälle
 
