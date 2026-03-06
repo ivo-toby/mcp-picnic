@@ -1,4 +1,4 @@
-import { Server } from "@modelcontextprotocol/sdk/server/index.js"
+import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js"
 import { toolRegistry } from "../tools/index.js"
 import { promptRegistry } from "../prompts/index.js"
 import { resourceRegistry } from "../resources/index.js"
@@ -14,7 +14,7 @@ export interface ServerConfig {
   }
 }
 
-export function createMCPServer(config: ServerConfig = {}): Server {
+export function createMCPServer(config: ServerConfig = {}): McpServer {
   const defaultConfig = {
     name: packageJson.name,
     version: packageJson.version,
@@ -34,7 +34,7 @@ export function createMCPServer(config: ServerConfig = {}): Server {
     },
   }
 
-  return new Server(
+  return new McpServer(
     {
       name: finalConfig.name,
       version: finalConfig.version,

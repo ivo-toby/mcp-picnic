@@ -1,15 +1,15 @@
 import { describe, it, expect, vi, beforeEach } from "vitest"
-import { Server } from "@modelcontextprotocol/sdk/server/index.js"
+import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js"
 import { createMCPServer } from "../../../src/utils/server-factory"
 import { toolRegistry } from "../../../src/tools/registry"
 import { promptRegistry } from "../../../src/prompts/registry"
 import { resourceRegistry } from "../../../src/resources/registry"
 import packageJson from "../../../package.json"
 
-// Mock the SDK Server
-vi.mock("@modelcontextprotocol/sdk/server/index.js", () => {
+// Mock the SDK McpServer
+vi.mock("@modelcontextprotocol/sdk/server/mcp.js", () => {
   return {
-    Server: vi.fn().mockImplementation((info, init) => {
+    McpServer: vi.fn().mockImplementation((info, init) => {
       return {
         info,
         init,
@@ -38,7 +38,7 @@ describe("createMCPServer", () => {
   it("should create a server with default configuration", () => {
     const server = createMCPServer()
 
-    expect(Server).toHaveBeenCalledTimes(1)
+    expect(McpServer).toHaveBeenCalledTimes(1)
     // @ts-expect-error - private property access
     expect(server.info).toEqual({
       name: packageJson.name,
@@ -62,7 +62,7 @@ describe("createMCPServer", () => {
     }
     const server = createMCPServer(customConfig)
 
-    expect(Server).toHaveBeenCalledTimes(1)
+    expect(McpServer).toHaveBeenCalledTimes(1)
     // @ts-expect-error - private property access
     expect(server.info).toEqual({
       name: "CustomServer",
