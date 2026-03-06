@@ -47,6 +47,22 @@ Based on constitution preference:
 
 ## Execution Flow
 
+### Phase 0: Set Up Tasks File
+
+**IMPORTANT: Before doing anything else, run the setup script to prepare the tasks file.**
+
+Run this command:
+```
+.minispec/scripts/bash/setup-plan.sh --json
+```
+
+This will:
+- Ensure the feature spec directory exists
+- Copy the tasks template to `tasks.md`
+- Output paths for `DESIGN`, `TASKS`, `FEATURE_DIR`, and `BRANCH`
+
+Parse the JSON output to locate the design and tasks files. If the script fails, create the tasks file manually at `.minispec/specs/[feature-name]/tasks.md`.
+
 ### Phase 1: Load Context
 
 1. **Read the design document**:
