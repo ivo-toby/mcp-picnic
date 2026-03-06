@@ -1,6 +1,6 @@
 ---
 feature: picnic-api-v4-upgrade
-status: designed
+status: planned
 created: 2026-03-06
 decisions: [001, 002, 003]
 ---
