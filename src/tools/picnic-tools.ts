@@ -146,6 +146,47 @@ toolRegistry.register({
 // Note: picnic_get_article tool removed - endpoint deprecated (GitHub issue #23)
 // Use picnic_search instead for basic product information
 
+// Get product details tool
+const productDetailsInputSchema = z.object({
+  productId: z
+    .string()
+    .describe("The product selling unit ID (e.g. 's1001524'), as returned by search or cart"),
+  full: z
+    .boolean()
+    .default(false)
+    .describe(
+      "When false (default), returns essential fields only (id, name, brand, price, unit, image). " +
+        "When true, returns full details including description, allergens, nutritional info, promotions, and similar products.",
+    ),
+})
+
+toolRegistry.register({
+  name: "picnic_get_product_details",
+  description:
+    "Look up product details by ID. Returns essential info by default (name, brand, price, unit, image). " +
+    "Set full=true for complete details including description, allergens, ingredients, and similar products. " +
+    "Use this to resolve opaque product IDs from cart or order history.",
+  inputSchema: productDetailsInputSchema,
+  handler: async (args) => {
+    await ensureClientInitialized()
+    const client = getPicnicClient()
+    const details = await client.catalog.getProductDetails(args.productId)
+
+    if (args.full) {
+      return details
+    }
+
+    return {
+      id: details.id,
+      name: details.name,
+      brand: details.brand,
+      price: details.displayPrice,
+      unit: details.unitQuantity,
+      ...(details.imageIds.length > 0 && { image_id: details.imageIds[0] }),
+    }
+  },
+})
+
 // Get product image tool
 const imageInputSchema = z.object({
   imageId: z.string().describe("The ID of the image to retrieve"),
