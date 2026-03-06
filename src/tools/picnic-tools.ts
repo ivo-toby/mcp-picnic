@@ -27,36 +27,38 @@ function filterCartData(cart: unknown) {
   if (!cart || typeof cart !== "object") return cart
 
   const cartObj = cart as {
-    items?: unknown[]
+    type?: string
+    id?: string
+    items?: Array<{
+      id?: string
+      display_price?: number
+      price?: number
+      items?: Array<{
+        id?: string
+        name?: string
+        unit_quantity?: string
+        price?: number
+        image_ids?: string[]
+        max_count?: number
+      }>
+    }>
     total_count?: number
     total_price?: number
     checkout_total_price?: number
     total_savings?: number
-    delivery_slots?: unknown[]
-    selected_slot?: unknown
-    [key: string]: unknown
   }
 
-  // Filter items to essential info only
-  const filteredItems = cartObj.items?.map((item: unknown) => {
-    const itemObj = item as {
-      id?: string
-      name?: string
-      display_price?: number
-      unit_quantity?: string
-      count?: number
-      price?: number
-      [key: string]: unknown
-    }
-
-    return {
-      id: itemObj.id,
-      name: itemObj.name,
-      price: itemObj.display_price || itemObj.price,
-      unit: itemObj.unit_quantity,
-      quantity: itemObj.count,
-    }
-  })
+  const filteredItems = cartObj.items?.map((orderLine) => ({
+    order_line_id: orderLine.id,
+    price: orderLine.display_price || orderLine.price,
+    articles: orderLine.items?.map((article) => ({
+      product_id: article.id,
+      name: article.name,
+      unit: article.unit_quantity,
+      price: article.price,
+      ...(article.image_ids?.length && { image_id: article.image_ids[0] }),
+    })),
+  }))
 
   return {
     type: cartObj.type,
