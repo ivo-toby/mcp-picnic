@@ -10,14 +10,14 @@ vi.mock("fs/promises", () => ({
   },
 }))
 
-// Mock picnic-api
+// Mock picnic-api (v4 domain-based structure)
 const mockLogin = vi.fn()
-const mockGetShoppingCart = vi.fn()
+const mockGetCart = vi.fn()
 vi.mock("picnic-api", () => {
   return {
     default: vi.fn().mockImplementation((opts: any) => ({
-      login: mockLogin,
-      getShoppingCart: mockGetShoppingCart,
+      auth: { login: mockLogin },
+      cart: { getCart: mockGetCart },
       authKey: opts?.authKey ?? "fresh-auth-key",
     })),
   }
@@ -48,26 +48,26 @@ describe("picnic-client session persistence", () => {
   describe("initializePicnicClient", () => {
     it("should load and reuse a valid saved session", async () => {
       vi.mocked(fs.readFile).mockResolvedValue(JSON.stringify({ authKey: "saved-key" }))
-      mockGetShoppingCart.mockResolvedValue({ user: "info" })
+      mockGetCart.mockResolvedValue({ user: "info" })
 
       const { initializePicnicClient } = await importClient()
       await initializePicnicClient()
 
       expect(fs.readFile).toHaveBeenCalledWith("picnic-session.json", "utf-8")
-      expect(mockGetShoppingCart).toHaveBeenCalled()
+      expect(mockGetCart).toHaveBeenCalled()
       expect(mockLogin).not.toHaveBeenCalled()
     })
 
     it("should fall back to login when saved session is invalid", async () => {
       vi.mocked(fs.readFile).mockResolvedValue(JSON.stringify({ authKey: "expired-key" }))
-      mockGetShoppingCart.mockRejectedValue(new Error("Unauthorized"))
+      mockGetCart.mockRejectedValue(new Error("Unauthorized"))
       mockLogin.mockResolvedValue(undefined)
       vi.mocked(fs.writeFile).mockResolvedValue(undefined)
 
       const { initializePicnicClient } = await importClient()
       await initializePicnicClient()
 
-      expect(mockGetShoppingCart).toHaveBeenCalled()
+      expect(mockGetCart).toHaveBeenCalled()
       expect(mockLogin).toHaveBeenCalledWith("test-user", "test-pass")
     })
 
@@ -80,7 +80,7 @@ describe("picnic-client session persistence", () => {
       await initializePicnicClient()
 
       expect(mockLogin).toHaveBeenCalledWith("test-user", "test-pass")
-      expect(mockGetShoppingCart).not.toHaveBeenCalled()
+      expect(mockGetCart).not.toHaveBeenCalled()
     })
 
     it("should save session after fresh login", async () => {
@@ -136,7 +136,7 @@ describe("picnic-client session persistence", () => {
 
       const client = getPicnicClient()
       expect(client).toBeDefined()
-      expect(client.login).toBeDefined()
+      expect(client.auth.login).toBeDefined()
     })
   })
 
