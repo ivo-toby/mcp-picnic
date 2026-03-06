@@ -17,7 +17,7 @@ async function loadSession(): Promise<string | null> {
 
 export async function saveSession(): Promise<void> {
   if (!picnicClientInstance) return
-  const authKey = (picnicClientInstance as any).authKey
+  const authKey = picnicClientInstance.authKey
   if (authKey) {
     await fs.writeFile(config.PICNIC_SESSION_FILE, JSON.stringify({ authKey }))
   }
@@ -49,7 +49,7 @@ export async function initializePicnicClient(
   if (savedAuthKey) {
     try {
       console.error("Testing saved auth key...")
-      await client.getShoppingCart()
+      await client.cart.getCart()
       picnicClientInstance = client
       console.error("Successfully reused saved session.")
       return
@@ -59,7 +59,7 @@ export async function initializePicnicClient(
     }
   }
 
-  const loginResult = await client.login(loginUsername, loginPassword)
+  const loginResult = await client.auth.login(loginUsername, loginPassword)
   picnicClientInstance = client
 
   if (loginResult?.second_factor_authentication_required) {
