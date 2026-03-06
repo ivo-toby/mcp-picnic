@@ -9,9 +9,15 @@ vi.mock("@modelcontextprotocol/sdk/server/stdio.js", () => ({
   })),
 }))
 
-// Create a mock server that will be reused
-const mockServer = {
+// Create a mock underlying server
+const mockUnderlyingServer = {
   setRequestHandler: vi.fn(),
+  connect: vi.fn().mockResolvedValue(undefined),
+}
+
+// Create a mock McpServer that wraps the underlying server
+const mockServer = {
+  server: mockUnderlyingServer,
   connect: vi.fn().mockResolvedValue(undefined),
 }
 
@@ -55,8 +61,8 @@ describe("StdioServer", () => {
     })
 
     it("should create a configured server", () => {
-      expect(stdioServer["server"]).toBeDefined()
-      expect(stdioServer["server"].setRequestHandler).toBeDefined()
+      expect(stdioServer["mcpServer"]).toBeDefined()
+      expect(stdioServer["mcpServer"].server.setRequestHandler).toBeDefined()
     })
 
     it("should not have transport initially", () => {
@@ -203,7 +209,7 @@ describe("StdioServer", () => {
 
   describe("integration", () => {
     it("should properly integrate with base transport server", () => {
-      expect(stdioServer["server"]).toBeDefined()
+      expect(stdioServer["mcpServer"]).toBeDefined()
       expect(typeof stdioServer.start).toBe("function")
       expect(typeof stdioServer.stop).toBe("function")
     })

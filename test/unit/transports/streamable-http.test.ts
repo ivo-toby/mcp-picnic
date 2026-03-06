@@ -1,5 +1,4 @@
 import http from "http"
-import express from "express"
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest"
 import {
   StreamableHttpServer,
@@ -44,10 +43,14 @@ vi.mock("@modelcontextprotocol/sdk/server/streamableHttp.js", () => ({
 describe("StreamableHttpServer", () => {
   let server: StreamableHttpServer
   const mockCreateMCPServer = vi.mocked(createMCPServer)
+  const mockUnderlyingServer = {
+    setRequestHandler: vi.fn(),
+    connect: vi.fn().mockResolvedValue(undefined),
+  }
   const mockSDKServer = {
+    server: mockUnderlyingServer,
     connect: vi.fn().mockResolvedValue(undefined),
     handleRequest: vi.fn(),
-    setRequestHandler: vi.fn(),
     close: vi.fn().mockResolvedValue(undefined),
   }
 
@@ -151,22 +154,31 @@ describe("StreamableHttpServer", () => {
   })
 
   it("should provide a health check", async () => {
-    server = new StreamableHttpServer()
-    const mockReq = {} as express.Request
-    const mockRes = {
-      status: vi.fn().mockReturnThis(),
-      json: vi.fn(),
-    } as unknown as express.Response
+    vi.useRealTimers()
+    server = new StreamableHttpServer({ port: 0, enableRequestLogging: false })
+    await server.start()
 
     // @ts-expect-error - private property access
-    const healthCheckHandler = server.app._router.stack.find(
-      (r: any) => r.route && r.route.path === "/health",
-    ).route.stack[0].handle
+    const httpServer = server.server as http.Server
+    const address = httpServer.address() as { port: number }
 
-    await healthCheckHandler(mockReq, mockRes)
+    const res = await new Promise<{ statusCode: number; body: any }>((resolve, reject) => {
+      const req = http.request(
+        { hostname: "127.0.0.1", port: address.port, path: "/health", method: "GET" },
+        (response) => {
+          let data = ""
+          response.on("data", (chunk: string) => (data += chunk))
+          response.on("end", () => {
+            resolve({ statusCode: response.statusCode!, body: JSON.parse(data) })
+          })
+        },
+      )
+      req.on("error", reject)
+      req.end()
+    })
 
-    expect(mockRes.status).toHaveBeenCalledWith(200)
-    expect(mockRes.json).toHaveBeenCalledWith(
+    expect(res.statusCode).toBe(200)
+    expect(res.body).toEqual(
       expect.objectContaining({
         sessions: {
           active: 0,
@@ -177,11 +189,37 @@ describe("StreamableHttpServer", () => {
   })
 
   it("should setup routes", async () => {
-    server = new StreamableHttpServer()
-    // @ts-expect-error
-    const app = server.app as express.Application
-    const mcpRoute = app._router.stack.find((r: any) => r.route && r.route.path === "/mcp")
-    expect(mcpRoute).toBeDefined()
-    expect(mcpRoute.route.methods.post).toBe(true)
+    vi.useRealTimers()
+    server = new StreamableHttpServer({ port: 0, enableRequestLogging: false })
+    await server.start()
+
+    // @ts-expect-error - private property access
+    const httpServer = server.server as http.Server
+    const address = httpServer.address() as { port: number }
+
+    const res = await new Promise<{ statusCode: number }>((resolve, reject) => {
+      const req = http.request(
+        {
+          hostname: "127.0.0.1",
+          port: address.port,
+          path: "/mcp",
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+        },
+        (response) => {
+          let data = ""
+          response.on("data", (chunk: string) => (data += chunk))
+          response.on("end", () => {
+            resolve({ statusCode: response.statusCode! })
+          })
+        },
+      )
+      req.on("error", reject)
+      req.write("{}")
+      req.end()
+    })
+
+    // We get a response (not 404), meaning the /mcp route exists
+    expect(res.statusCode).not.toBe(404)
   })
 })

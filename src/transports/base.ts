@@ -1,4 +1,4 @@
-import { Server } from "@modelcontextprotocol/sdk/server/index.js"
+import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js"
 import {
   CallToolRequestSchema,
   ListToolsRequestSchema,
@@ -23,15 +23,18 @@ export abstract class BaseTransportServer extends EventEmitter {
    * Creates a server instance with all handlers configured
    */
   protected createConfiguredServer(): ReturnType<typeof createMCPServer> {
-    const server = createMCPServer()
-    this.setupServerHandlers(server)
-    return server
+    const mcpServer = createMCPServer()
+    this.setupServerHandlers(mcpServer)
+    return mcpServer
   }
 
   /**
-   * Sets up all MCP request handlers on the given server
+   * Sets up all MCP request handlers on the given server.
+   * Uses the underlying Server instance for advanced request handler setup.
    */
-  protected setupServerHandlers(server: Server): void {
+  protected setupServerHandlers(mcpServer: McpServer): void {
+    const server = mcpServer.server
+
     // List tools handler
     server.setRequestHandler(ListToolsRequestSchema, async () => {
       try {

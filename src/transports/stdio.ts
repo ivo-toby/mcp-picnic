@@ -12,7 +12,7 @@ export interface StdioServerOptions {
  * Class to handle stdio server setup and configuration using the official MCP stdio transport
  */
 export class StdioServer extends BaseTransportServer {
-  private server: ReturnType<typeof import("../utils/server-factory.js").createMCPServer>
+  private mcpServer: ReturnType<typeof import("../utils/server-factory.js").createMCPServer>
   private transport?: StdioServerTransport
 
   /**
@@ -23,7 +23,7 @@ export class StdioServer extends BaseTransportServer {
   constructor() {
     super()
     // Create MCP server with handlers configured
-    this.server = this.createConfiguredServer()
+    this.mcpServer = this.createConfiguredServer()
   }
 
   /**
@@ -33,7 +33,7 @@ export class StdioServer extends BaseTransportServer {
    */
   public async start(): Promise<void> {
     this.transport = new StdioServerTransport()
-    await this.server.connect(this.transport)
+    await this.mcpServer.connect(this.transport)
     console.error("MCP Server Template running on stdio")
   }
 
