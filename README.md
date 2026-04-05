@@ -21,6 +21,7 @@ MCP Picnic is a bridge between AI assistants (like Claude, ChatGPT, or other MCP
 
 - 🇳🇱 Netherlands
 - 🇩🇪 Germany
+- 🇫🇷 France
 
 ## Key Features
 
@@ -46,7 +47,7 @@ MCP Picnic is a bridge between AI assistants (like Claude, ChatGPT, or other MCP
 
 ### Prerequisites
 
-- A Picnic account (available in Netherlands or Germany)
+- A Picnic account (available in Netherlands, Germany, or France)
 - An MCP-compatible AI assistant (Claude Desktop, Continue, etc.)
 - Node.js 18+ installed on your system
 
@@ -83,7 +84,7 @@ Add this configuration:
 
 **Important**:
 - Replace `your-picnic-email@example.com` and `your-picnic-password` with your actual Picnic account credentials.
-- Set `PICNIC_COUNTRY_CODE` to `"DE"` if your Picnic account is registered in Germany. If you're in the Netherlands, you can omit this field or set it to `"NL"`.
+- Set `PICNIC_COUNTRY_CODE` to `"DE"` for Germany, `"FR"` for France, or `"NL"` for the Netherlands (default).
 
 3. **Restart Claude Desktop** completely
 
@@ -345,7 +346,7 @@ PICNIC_PASSWORD=your-picnic-password
 
 # Country Configuration (optional, defaults to NL)
 # Set this to match your Picnic account's country
-# Supported values: NL (Netherlands), DE (Germany)
+# Supported values: NL (Netherlands), DE (Germany), FR (France)
 PICNIC_COUNTRY_CODE=NL
 
 # HTTP Transport settings (optional)
@@ -365,9 +366,11 @@ The `PICNIC_COUNTRY_CODE` setting determines which Picnic regional API to connec
 - **Supported values**:
   - `NL` - Netherlands (🇳🇱)
   - `DE` - Germany (🇩🇪)
+  - `FR` - France (🇫🇷)
 
 **When to set this:**
 - If your Picnic account is registered in Germany, you **must** set `PICNIC_COUNTRY_CODE=DE`
+- If your Picnic account is registered in France, you **must** set `PICNIC_COUNTRY_CODE=FR`
 - If your Picnic account is in the Netherlands, you can omit this setting (defaults to `NL`)
 
 **Example for German accounts:**
@@ -406,7 +409,7 @@ PICNIC_COUNTRY_CODE=DE
 
 **Important**:
 - Replace the placeholder credentials with your actual Picnic account details
-- Set `PICNIC_COUNTRY_CODE` to `"DE"` for German accounts, or `"NL"` for Netherlands accounts (default)
+- Set `PICNIC_COUNTRY_CODE` to `"DE"` for Germany, `"FR"` for France, or `"NL"` for the Netherlands (default)
 
 **Setup Steps:**
 
@@ -439,7 +442,7 @@ Add to your Continue configuration:
 }
 ```
 
-**Note**: Set `PICNIC_COUNTRY_CODE` to `"DE"` if your account is registered in Germany.
+**Note**: Set `PICNIC_COUNTRY_CODE` to `"DE"` for Germany or `"FR"` for France. Netherlands accounts can omit this field (defaults to `"NL"`).
 
 ## Authentication
 
