@@ -375,6 +375,8 @@ PICNIC_COUNTRY_CODE=NL
 ENABLE_HTTP_SERVER=true
 HTTP_PORT=3000
 HTTP_HOST=0.0.0.0
+# Optional: protect HTTP endpoints with a URL token
+HTTP_AUTH_TOKEN=replace-with-a-long-random-token
 
 # Session persistence (optional, strongly recommended in containers)
 PICNIC_SESSION_FILE=~/.picnic-session.json
@@ -398,10 +400,24 @@ The `PICNIC_COUNTRY_CODE` setting determines which Picnic regional API to connec
 
 **Example for German accounts:**
 ```bash
-PICNIC_USERNAME=ihre-email@example.com
-PICNIC_PASSWORD=ihr-passwort
+PICNIC_USERNAME=your-email@example.com
+PICNIC_PASSWORD=your-password
 PICNIC_COUNTRY_CODE=DE
 ```
+
+#### HTTP Token Authentication
+
+When `HTTP_AUTH_TOKEN` is set, all HTTP endpoints except `/health` require a `token` query parameter.
+
+Example requests:
+
+```bash
+curl "http://localhost:3000/mcp?token=YOUR_TOKEN"
+curl "http://localhost:3000/sessions?token=YOUR_TOKEN"
+curl "http://localhost:3000/sessions/test-session-id?token=YOUR_TOKEN" -X DELETE
+```
+
+If the token is missing or invalid, the server responds with `401 Unauthorized`.
 
 ### MCP Client Configuration
 

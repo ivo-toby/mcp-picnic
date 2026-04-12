@@ -13,6 +13,7 @@ import { randomUUID } from "crypto"
 export interface StreamableHttpServerOptions {
   port?: number
   host?: string
+  authToken?: string
   corsOptions?: cors.CorsOptions
   rateLimitConfig?: RateLimitConfig
   requestTimeoutMs?: number
@@ -84,6 +85,27 @@ export class StreamableHttpServer extends BaseTransportServer {
           )
         })
         next()
+      })
+    }
+
+    if (this.options.authToken) {
+      this.app.use((req: Request, res: Response, next: NextFunction) => {
+        if (req.path === "/health") {
+          return next()
+        }
+
+        const requestToken = req.query.token
+        const hasValidToken =
+          typeof requestToken === "string" && requestToken === this.options.authToken
+
+        if (!hasValidToken) {
+          return res.status(401).json({
+            error: "Unauthorized",
+            message: "Missing or invalid token query parameter",
+          })
+        }
+
+        return next()
       })
     }
 

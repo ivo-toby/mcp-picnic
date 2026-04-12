@@ -222,4 +222,82 @@ describe("StreamableHttpServer", () => {
     // We get a response (not 404), meaning the /mcp route exists
     expect(res.statusCode).not.toBe(404)
   })
+
+  it("should require query token when authToken is configured", async () => {
+    vi.useRealTimers()
+    server = new StreamableHttpServer({ port: 0, enableRequestLogging: false, authToken: "secret" })
+    await server.start()
+
+    // @ts-expect-error - private property access
+    const httpServer = server.server as http.Server
+    const address = httpServer.address() as { port: number }
+
+    const res = await new Promise<{ statusCode: number; body: any }>((resolve, reject) => {
+      const req = http.request(
+        { hostname: "127.0.0.1", port: address.port, path: "/sessions", method: "GET" },
+        (response) => {
+          let data = ""
+          response.on("data", (chunk: string) => (data += chunk))
+          response.on("end", () => {
+            resolve({ statusCode: response.statusCode!, body: JSON.parse(data) })
+          })
+        },
+      )
+      req.on("error", reject)
+      req.end()
+    })
+
+    expect(res.statusCode).toBe(401)
+    expect(res.body).toEqual(
+      expect.objectContaining({
+        error: "Unauthorized",
+      }),
+    )
+  })
+
+  it("should allow authenticated requests and keep /health public", async () => {
+    vi.useRealTimers()
+    server = new StreamableHttpServer({ port: 0, enableRequestLogging: false, authToken: "secret" })
+    await server.start()
+
+    // @ts-expect-error - private property access
+    const httpServer = server.server as http.Server
+    const address = httpServer.address() as { port: number }
+
+    const sessionsRes = await new Promise<{ statusCode: number }>((resolve, reject) => {
+      const req = http.request(
+        {
+          hostname: "127.0.0.1",
+          port: address.port,
+          path: "/sessions?token=secret",
+          method: "GET",
+        },
+        (response) => {
+          response.on("data", () => {})
+          response.on("end", () => {
+            resolve({ statusCode: response.statusCode! })
+          })
+        },
+      )
+      req.on("error", reject)
+      req.end()
+    })
+
+    const healthRes = await new Promise<{ statusCode: number }>((resolve, reject) => {
+      const req = http.request(
+        { hostname: "127.0.0.1", port: address.port, path: "/health", method: "GET" },
+        (response) => {
+          response.on("data", () => {})
+          response.on("end", () => {
+            resolve({ statusCode: response.statusCode! })
+          })
+        },
+      )
+      req.on("error", reject)
+      req.end()
+    })
+
+    expect(sessionsRes.statusCode).toBe(200)
+    expect(healthRes.statusCode).toBe(200)
+  })
 })

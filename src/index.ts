@@ -21,6 +21,7 @@ async function runServer() {
     const server = new StreamableHttpServer({
       port: config.HTTP_PORT,
       host: config.HTTP_HOST,
+      authToken: config.HTTP_AUTH_TOKEN,
     })
 
     // Handle graceful shutdown for HTTP server
