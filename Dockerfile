@@ -18,8 +18,7 @@ ENV NODE_ENV=production
 
 # Runtime dependency install only
 COPY package*.json ./
-RUN --mount=type=cache,target=/root/.npm npm ci --omit=dev --ignore-scripts \
-  && npm cache clean --force
+RUN --mount=type=cache,target=/root/.npm npm ci --omit=dev --ignore-scripts
 
 # Copy production artifacts
 COPY --from=build /app/dist ./dist
