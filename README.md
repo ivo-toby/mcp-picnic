@@ -87,7 +87,7 @@ Add this configuration:
 
 3. **Restart Claude Desktop** completely
 
-4. **Complete 2FA** (if enabled on your account) - on your first conversation, ask the assistant to verify your account. It will send you a code via SMS and prompt you to enter it. See the [Authentication](#authentication) section for details.
+4. **Complete 2FA** (if enabled on your account) - ask your MCP client/assistant to call the `picnic_generate_2fa_code` tool, then provide the received code so it can call `picnic_verify_2fa_code`. See the [Authentication](#authentication) section for details.
 
 5. **Start using it** - you should see a 🔨 hammer icon in the input area:
 
@@ -318,6 +318,29 @@ npm run build
 npm link
 ```
 
+### Option 3: Docker / Docker Compose
+
+```bash
+# 1) Create .env with your Picnic credentials
+cat > .env <<EOF
+PICNIC_USERNAME=your-picnic-email@example.com
+PICNIC_PASSWORD=your-picnic-password
+PICNIC_COUNTRY_CODE=NL
+EOF
+
+# 2) Build and start
+docker compose up -d --build
+
+# 3) Check health
+docker compose ps
+curl http://localhost:3000/health
+```
+
+Notes:
+- The container runs as a non-root user (`node`).
+- Session persistence is configured via volume `picnic_data` mapped to `/app/data`.
+- `PICNIC_SESSION_FILE` defaults to `/app/data/picnic-session.json` in the container.
+
 ### Configuration
 
 The server supports both stdio and HTTP transports:
@@ -351,7 +374,10 @@ PICNIC_COUNTRY_CODE=NL
 # HTTP Transport settings (optional)
 ENABLE_HTTP_SERVER=true
 HTTP_PORT=3000
-HTTP_HOST=localhost
+HTTP_HOST=0.0.0.0
+
+# Session persistence (optional, strongly recommended in containers)
+PICNIC_SESSION_FILE=~/.picnic-session.json
 
 # Picnic API settings (optional)
 PICNIC_API_VERSION=15
@@ -450,22 +476,17 @@ The server uses the credentials configured in your environment variables:
 
 ### Two-Factor Authentication (2FA)
 
-If your Picnic account has 2FA enabled, you need to complete the verification flow before you can use any shopping tools. On your first conversation after starting the server, ask the AI assistant to:
+If your Picnic account has 2FA enabled, complete the verification flow using MCP tools:
 
-1. **Generate a 2FA code**: The assistant will call `picnic_generate_2fa_code` to send a verification code to your phone via SMS
-2. **Enter the code**: Tell the assistant the code you received, and it will call `picnic_verify_2fa_code` to complete authentication
+1. Call `picnic_generate_2fa_code` to send a verification code (usually SMS).
+2. Call `picnic_verify_2fa_code` with the received OTP code.
 
-Once 2FA is verified, your session is saved and you won't need to repeat this step until the session expires.
+> Important: In Docker, the server itself cannot "chat" or type the code for you. Your MCP client (Claude Desktop, Continue, etc.) must trigger these tools.
 
-**Example**:
-```
-User: "I need to verify my Picnic account"
-AI: I'll generate a 2FA code for you... A code has been sent to your phone via SMS.
-User: "The code is 123456"
-AI: Your 2FA code has been verified. You're now fully authenticated and can start shopping!
-```
+To avoid repeated 2FA challenges and container restart loops, persist `PICNIC_SESSION_FILE` to a Docker volume.
+When 2FA is pending, the server stays up so your client can complete `picnic_generate_2fa_code` and `picnic_verify_2fa_code`.
 
-**Security Note**: Your credentials are only used to authenticate with Picnic's API. The session token is stored locally at `~/.picnic-session.json`. Your password is never stored on disk.
+**Security Note**: Credentials are used only for Picnic API authentication. The session token is stored locally at `PICNIC_SESSION_FILE`; the password is never stored on disk.
 
 ## Available Tools
 

@@ -5,6 +5,20 @@ import { config } from "../config.js"
 // Singleton instance for caching
 let picnicClientInstance: InstanceType<typeof PicnicClient> | null = null
 
+function isTwoFactorAuthenticationError(error: unknown): boolean {
+  if (!(error instanceof Error)) {
+    return false
+  }
+
+  const normalizedMessage = error.message.toLowerCase()
+  return (
+    normalizedMessage.includes("2fa") ||
+    normalizedMessage.includes("mfa") ||
+    normalizedMessage.includes("second_factor") ||
+    normalizedMessage.includes("second factor")
+  )
+}
+
 async function loadSession(): Promise<string | null> {
   try {
     const data = await fs.readFile(config.PICNIC_SESSION_FILE, "utf-8")
@@ -59,14 +73,30 @@ export async function initializePicnicClient(
     }
   }
 
-  const loginResult = await client.auth.login(loginUsername, loginPassword)
-  picnicClientInstance = client
+  try {
+    const loginResult = await client.auth.login(loginUsername, loginPassword)
+    picnicClientInstance = client
 
-  if (loginResult?.second_factor_authentication_required) {
-    console.error("Picnic client logged in, but 2FA is required. Use the 2FA tools to complete authentication.")
-  } else {
+    if (loginResult?.second_factor_authentication_required) {
+      console.error(
+        "Picnic client logged in, but 2FA is required. Use the 2FA tools to complete authentication.",
+      )
+      return
+    }
+
     await saveSession()
     console.error("Picnic client initialized successfully.")
+  } catch (error) {
+    if (isTwoFactorAuthenticationError(error)) {
+      // Keep the partially authenticated client in memory so 2FA tools can be called.
+      picnicClientInstance = client
+      console.error(
+        "2FA/MFA challenge detected during login. Server will stay running so you can call picnic_generate_2fa_code and picnic_verify_2fa_code.",
+      )
+      return
+    }
+
+    throw error
   }
 }
 
