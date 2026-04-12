@@ -25,6 +25,7 @@ describe("Config Schema - PICNIC_COUNTRY_CODE (Issue #10 regression)", () => {
       .transform((val) => parseInt(val, 10))
       .default("3000"),
     HTTP_HOST: z.string().default("localhost"),
+    HTTP_AUTH_TOKEN: z.string().optional(),
   })
 
   describe("PICNIC_COUNTRY_CODE validation", () => {
@@ -157,6 +158,15 @@ describe("Config Schema - PICNIC_COUNTRY_CODE (Issue #10 regression)", () => {
 
     it("should not require PICNIC_COUNTRY_CODE due to default", () => {
       // Should not throw - PICNIC_COUNTRY_CODE has a default value
+      expect(() => {
+        configSchema.parse({
+          PICNIC_USERNAME: "test-user",
+          PICNIC_PASSWORD: "test-pass",
+        })
+      }).not.toThrow()
+    })
+
+    it("should not require HTTP_AUTH_TOKEN", () => {
       expect(() => {
         configSchema.parse({
           PICNIC_USERNAME: "test-user",

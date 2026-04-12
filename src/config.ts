@@ -20,6 +20,7 @@ const configSchema = z.object({
     .transform((val) => parseInt(val, 10))
     .default("3000"),
   HTTP_HOST: z.string().default("localhost"),
+  HTTP_AUTH_TOKEN: z.string().optional(),
   PICNIC_SESSION_FILE: z.string().default(defaultSessionFile),
 })
 
