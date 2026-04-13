@@ -22,6 +22,7 @@ async function runServer() {
       port: config.HTTP_PORT,
       host: config.HTTP_HOST,
       authToken: config.HTTP_AUTH_TOKEN,
+      authHeaderName: config.HTTP_AUTH_HEADER_NAME,
     })
 
     // Handle graceful shutdown for HTTP server

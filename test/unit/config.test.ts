@@ -26,6 +26,7 @@ describe("Config Schema - PICNIC_COUNTRY_CODE (Issue #10 regression)", () => {
       .default("3000"),
     HTTP_HOST: z.string().default("localhost"),
     HTTP_AUTH_TOKEN: z.string().optional(),
+    HTTP_AUTH_HEADER_NAME: z.string().default("x-mcp-token"),
   })
 
   describe("PICNIC_COUNTRY_CODE validation", () => {
@@ -173,6 +174,15 @@ describe("Config Schema - PICNIC_COUNTRY_CODE (Issue #10 regression)", () => {
           PICNIC_PASSWORD: "test-pass",
         })
       }).not.toThrow()
+    })
+
+    it("should default HTTP_AUTH_HEADER_NAME", () => {
+      const result = configSchema.parse({
+        PICNIC_USERNAME: "test-user",
+        PICNIC_PASSWORD: "test-pass",
+      })
+
+      expect(result.HTTP_AUTH_HEADER_NAME).toBe("x-mcp-token")
     })
   })
 })

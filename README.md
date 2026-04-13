@@ -375,8 +375,10 @@ PICNIC_COUNTRY_CODE=NL
 ENABLE_HTTP_SERVER=true
 HTTP_PORT=3000
 HTTP_HOST=0.0.0.0
-# Optional: protect HTTP endpoints with a URL token
+# Optional: protect HTTP endpoints with a shared token
 HTTP_AUTH_TOKEN=replace-with-a-long-random-token
+# Optional: HTTP header name to accept token auth (default: x-mcp-token)
+HTTP_AUTH_HEADER_NAME=x-mcp-token
 
 # Session persistence (optional, strongly recommended in containers)
 PICNIC_SESSION_FILE=~/.picnic-session.json
@@ -407,7 +409,11 @@ PICNIC_COUNTRY_CODE=DE
 
 #### HTTP Token Authentication
 
-When `HTTP_AUTH_TOKEN` is set, all HTTP endpoints except `/health` require a `token` query parameter.
+When `HTTP_AUTH_TOKEN` is set, all HTTP endpoints except `/health` require authentication. You can authenticate with either:
+
+- Query string token: `?token=YOUR_TOKEN`
+- Custom HTTP header token: `<HTTP_AUTH_HEADER_NAME>: YOUR_TOKEN` (defaults to `x-mcp-token`)
+- Authorization header bearer token: `Authorization: Bearer YOUR_TOKEN`
 
 Example requests:
 
@@ -415,6 +421,8 @@ Example requests:
 curl "http://localhost:3000/mcp?token=YOUR_TOKEN"
 curl "http://localhost:3000/sessions?token=YOUR_TOKEN"
 curl "http://localhost:3000/sessions/test-session-id?token=YOUR_TOKEN" -X DELETE
+curl -H "x-mcp-token: YOUR_TOKEN" "http://localhost:3000/mcp"
+curl -H "Authorization: Bearer YOUR_TOKEN" "http://localhost:3000/sessions"
 ```
 
 If the token is missing or invalid, the server responds with `401 Unauthorized`.

@@ -255,7 +255,7 @@ describe("StreamableHttpServer", () => {
     )
   })
 
-  it("should allow authenticated requests and keep /health public", async () => {
+  it("should allow query-string authentication and keep /health public", async () => {
     vi.useRealTimers()
     server = new StreamableHttpServer({ port: 0, enableRequestLogging: false, authToken: "secret" })
     await server.start()
@@ -299,5 +299,74 @@ describe("StreamableHttpServer", () => {
 
     expect(sessionsRes.statusCode).toBe(200)
     expect(healthRes.statusCode).toBe(200)
+  })
+
+  it("should allow custom header token authentication", async () => {
+    vi.useRealTimers()
+    server = new StreamableHttpServer({
+      port: 0,
+      enableRequestLogging: false,
+      authToken: "secret",
+      authHeaderName: "x-api-token",
+    })
+    await server.start()
+
+    // @ts-expect-error - private property access
+    const httpServer = server.server as http.Server
+    const address = httpServer.address() as { port: number }
+
+    const sessionsRes = await new Promise<{ statusCode: number }>((resolve, reject) => {
+      const req = http.request(
+        {
+          hostname: "127.0.0.1",
+          port: address.port,
+          path: "/sessions",
+          method: "GET",
+          headers: { "x-api-token": "secret" },
+        },
+        (response) => {
+          response.on("data", () => {})
+          response.on("end", () => {
+            resolve({ statusCode: response.statusCode! })
+          })
+        },
+      )
+      req.on("error", reject)
+      req.end()
+    })
+
+    expect(sessionsRes.statusCode).toBe(200)
+  })
+
+  it("should allow authorization bearer token authentication", async () => {
+    vi.useRealTimers()
+    server = new StreamableHttpServer({ port: 0, enableRequestLogging: false, authToken: "secret" })
+    await server.start()
+
+    // @ts-expect-error - private property access
+    const httpServer = server.server as http.Server
+    const address = httpServer.address() as { port: number }
+
+    const sessionsRes = await new Promise<{ statusCode: number }>((resolve, reject) => {
+      const req = http.request(
+        {
+          hostname: "127.0.0.1",
+          port: address.port,
+          path: "/sessions",
+          method: "GET",
+          headers: { Authorization: "Bearer secret" },
+        },
+        (response) => {
+          response.on("data", () => {})
+          response.on("end", () => {
+            resolve({ statusCode: response.statusCode! })
+          })
+        },
+      )
+      req.on("error", reject)
+      req.end()
+    })
+
+    expect(sessionsRes.statusCode).toBe(200)
   })
 })

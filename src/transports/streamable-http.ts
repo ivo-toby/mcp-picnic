@@ -14,6 +14,7 @@ export interface StreamableHttpServerOptions {
   port?: number
   host?: string
   authToken?: string
+  authHeaderName?: string
   corsOptions?: cors.CorsOptions
   rateLimitConfig?: RateLimitConfig
   requestTimeoutMs?: number
@@ -47,6 +48,7 @@ export class StreamableHttpServer extends BaseTransportServer {
     this.options = {
       port: 3000,
       host: "localhost",
+      authHeaderName: "x-mcp-token",
       corsOptions: { origin: "*" },
       rateLimitConfig: { windowMs: 15 * 60 * 1000, maxRequests: 100 },
       requestTimeoutMs: 10000,
@@ -95,13 +97,24 @@ export class StreamableHttpServer extends BaseTransportServer {
         }
 
         const requestToken = req.query.token
-        const hasValidToken =
+        const headerName = this.options.authHeaderName ?? "x-mcp-token"
+        const headerToken = req.header(headerName)
+        const authorizationHeader = req.header("authorization")
+
+        const queryTokenValid =
           typeof requestToken === "string" && requestToken === this.options.authToken
+        const headerTokenValid = typeof headerToken === "string" && headerToken === this.options.authToken
+        const bearerTokenValid =
+          typeof authorizationHeader === "string" &&
+          authorizationHeader === `Bearer ${this.options.authToken}`
+
+        const hasValidToken = queryTokenValid || headerTokenValid || bearerTokenValid
 
         if (!hasValidToken) {
           return res.status(401).json({
             error: "Unauthorized",
-            message: "Missing or invalid token query parameter",
+            message:
+              "Missing or invalid authentication token. Provide ?token=... or a valid auth header.",
           })
         }
 
