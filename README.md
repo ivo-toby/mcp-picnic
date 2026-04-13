@@ -337,8 +337,8 @@ curl http://localhost:3000/health
 ```
 
 Notes:
-- The container runs as a non-root user (`node`).
-- Session persistence is configured via volume `picnic_data` mapped to `/app/data`.
+- The container runs as a non-root user (UID `1638`).
+- Session persistence is configured via volume `picnic-data` mapped to `/app/data`.
 - `PICNIC_SESSION_FILE` defaults to `/app/data/picnic-session.json` in the container.
 
 ### Configuration
@@ -374,6 +374,7 @@ PICNIC_COUNTRY_CODE=NL
 # HTTP Transport settings (optional)
 ENABLE_HTTP_SERVER=true
 HTTP_PORT=3000
+# Default is localhost. Use 0.0.0.0 for Docker/external access.
 HTTP_HOST=0.0.0.0
 # Optional: protect HTTP endpoints with a shared token
 HTTP_AUTH_TOKEN=replace-with-a-long-random-token
@@ -411,16 +412,12 @@ PICNIC_COUNTRY_CODE=DE
 
 When `HTTP_AUTH_TOKEN` is set, all HTTP endpoints except `/health` require authentication. You can authenticate with either:
 
-- Query string token: `?token=YOUR_TOKEN`
 - Custom HTTP header token: `<HTTP_AUTH_HEADER_NAME>: YOUR_TOKEN` (defaults to `x-mcp-token`)
 - Authorization header bearer token: `Authorization: Bearer YOUR_TOKEN`
 
 Example requests:
 
 ```bash
-curl "http://localhost:3000/mcp?token=YOUR_TOKEN"
-curl "http://localhost:3000/sessions?token=YOUR_TOKEN"
-curl "http://localhost:3000/sessions/test-session-id?token=YOUR_TOKEN" -X DELETE
 curl -H "x-mcp-token: YOUR_TOKEN" "http://localhost:3000/mcp"
 curl -H "Authorization: Bearer YOUR_TOKEN" "http://localhost:3000/sessions"
 ```
