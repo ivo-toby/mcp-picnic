@@ -97,6 +97,39 @@ describe("picnic-client session persistence", () => {
       )
     })
 
+    it("should keep running when login throws a 2FA/MFA challenge error", async () => {
+      vi.mocked(fs.readFile).mockRejectedValue(new Error("ENOENT"))
+      mockLogin.mockRejectedValue(new Error("MFA is required for this account"))
+
+      const { initializePicnicClient, getPicnicClient } = await importClient()
+
+      await expect(initializePicnicClient()).resolves.toBeUndefined()
+      expect(() => getPicnicClient()).not.toThrow()
+      expect(fs.writeFile).not.toHaveBeenCalled()
+    })
+
+    it("should keep running when login throws a TOTP wording variant", async () => {
+      vi.mocked(fs.readFile).mockRejectedValue(new Error("ENOENT"))
+      mockLogin.mockRejectedValue(new Error("TOTP verification required"))
+
+      const { initializePicnicClient, getPicnicClient } = await importClient()
+
+      await expect(initializePicnicClient()).resolves.toBeUndefined()
+      expect(() => getPicnicClient()).not.toThrow()
+      expect(fs.writeFile).not.toHaveBeenCalled()
+    })
+
+    it("should keep running when login throws a structured 2FA error", async () => {
+      vi.mocked(fs.readFile).mockRejectedValue(new Error("ENOENT"))
+      mockLogin.mockRejectedValue({ second_factor_authentication_required: true })
+
+      const { initializePicnicClient, getPicnicClient } = await importClient()
+
+      await expect(initializePicnicClient()).resolves.toBeUndefined()
+      expect(() => getPicnicClient()).not.toThrow()
+      expect(fs.writeFile).not.toHaveBeenCalled()
+    })
+
     it("should not re-initialize if already initialized", async () => {
       vi.mocked(fs.readFile).mockRejectedValue(new Error("ENOENT"))
       mockLogin.mockResolvedValue(undefined)

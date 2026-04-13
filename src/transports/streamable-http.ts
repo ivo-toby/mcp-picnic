@@ -5,7 +5,7 @@ import { isInitializeRequest } from "@modelcontextprotocol/sdk/types.js"
 import { BaseTransportServer } from "./base.js"
 import { TransportError, ErrorCode, ErrorUtils } from "../types/errors.js"
 import { createRateLimitMiddleware, RateLimitConfig } from "../utils/rate-limiter.js"
-import { randomUUID } from "crypto"
+import { randomUUID, timingSafeEqual } from "crypto"
 
 /**
  * Configuration options for the HTTP server
@@ -13,6 +13,8 @@ import { randomUUID } from "crypto"
 export interface StreamableHttpServerOptions {
   port?: number
   host?: string
+  authToken?: string
+  authHeaderName?: string
   corsOptions?: cors.CorsOptions
   rateLimitConfig?: RateLimitConfig
   requestTimeoutMs?: number
@@ -46,6 +48,7 @@ export class StreamableHttpServer extends BaseTransportServer {
     this.options = {
       port: 3000,
       host: "localhost",
+      authHeaderName: "x-mcp-token",
       corsOptions: { origin: "*" },
       rateLimitConfig: { windowMs: 15 * 60 * 1000, maxRequests: 100 },
       requestTimeoutMs: 10000,
@@ -91,6 +94,36 @@ export class StreamableHttpServer extends BaseTransportServer {
     if (this.options.rateLimitConfig) {
       this.rateLimiter = createRateLimitMiddleware(this.options.rateLimitConfig)
       this.app.use(this.rateLimiter.middleware)
+    }
+
+    if (this.options.authToken) {
+      this.app.use((req: Request, res: Response, next: NextFunction) => {
+        if (req.path === "/health") {
+          return next()
+        }
+
+        const headerName = this.options.authHeaderName ?? "x-mcp-token"
+        const headerToken = req.header(headerName)
+        const authorizationHeader = req.header("authorization")
+
+        const headerTokenValid = this.compareAuthTokens(headerToken)
+        const bearerTokenValid =
+          typeof authorizationHeader === "string" &&
+          authorizationHeader.startsWith("Bearer ") &&
+          this.compareAuthTokens(authorizationHeader.slice(7))
+
+        const hasValidToken = headerTokenValid || bearerTokenValid
+
+        if (!hasValidToken) {
+          return res.status(401).json({
+            error: "Unauthorized",
+            message:
+              "Missing or invalid authentication token. Provide a valid auth header.",
+          })
+        }
+
+        return next()
+      })
     }
 
     // Request timeout middleware
@@ -178,6 +211,20 @@ export class StreamableHttpServer extends BaseTransportServer {
         id: null,
       })
     })
+  }
+
+  private compareAuthTokens(token: string | undefined): boolean {
+    if (!this.options.authToken || typeof token !== "string") {
+      return false
+    }
+
+    const provided = Buffer.from(token)
+    const expected = Buffer.from(this.options.authToken)
+    if (provided.length !== expected.length) {
+      return false
+    }
+
+    return timingSafeEqual(provided, expected)
   }
 
   /**

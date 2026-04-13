@@ -20,6 +20,8 @@ const configSchema = z.object({
     .transform((val) => parseInt(val, 10))
     .default("3000"),
   HTTP_HOST: z.string().default("localhost"),
+  HTTP_AUTH_TOKEN: z.string().optional(),
+  HTTP_AUTH_HEADER_NAME: z.string().default("x-mcp-token"),
   PICNIC_SESSION_FILE: z.string().default(defaultSessionFile),
 })
 
