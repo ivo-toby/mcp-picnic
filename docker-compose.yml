@@ -12,6 +12,7 @@ services:
       HTTP_HOST: "0.0.0.0"
       HTTP_PORT: "3000"
       HTTP_AUTH_TOKEN: "CHANGE_ME_SECURE_TOKEN"
+      HTTP_AUTH_HEADER_NAME: "x-mcp-token"
       PICNIC_SESSION_FILE: "/opt/mcp-picnic/picnic-session.json"
       PICNIC_USERNAME: "USERNAME"
       PICNIC_PASSWORD: "PASSWORD"
