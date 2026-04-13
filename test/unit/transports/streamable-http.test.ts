@@ -10,6 +10,7 @@ import { createMCPServer } from "../../../src/utils/server-factory"
 vi.mock("../../../src/utils/server-factory")
 vi.mock("crypto", () => ({
   randomUUID: vi.fn(() => "test-session-id"),
+  timingSafeEqual: vi.fn((a: Buffer, b: Buffer) => Buffer.compare(a, b) === 0),
 }))
 
 const mockTransport = {
@@ -223,7 +224,7 @@ describe("StreamableHttpServer", () => {
     expect(res.statusCode).not.toBe(404)
   })
 
-  it("should require query token when authToken is configured", async () => {
+  it("should require authentication when authToken is configured", async () => {
     vi.useRealTimers()
     server = new StreamableHttpServer({ port: 0, enableRequestLogging: false, authToken: "secret" })
     await server.start()
@@ -255,7 +256,7 @@ describe("StreamableHttpServer", () => {
     )
   })
 
-  it("should allow query-string authentication and keep /health public", async () => {
+  it("should require auth for /mcp POST when authToken is configured", async () => {
     vi.useRealTimers()
     server = new StreamableHttpServer({ port: 0, enableRequestLogging: false, authToken: "secret" })
     await server.start()
@@ -264,13 +265,14 @@ describe("StreamableHttpServer", () => {
     const httpServer = server.server as http.Server
     const address = httpServer.address() as { port: number }
 
-    const sessionsRes = await new Promise<{ statusCode: number }>((resolve, reject) => {
+    const mcpRes = await new Promise<{ statusCode: number }>((resolve, reject) => {
       const req = http.request(
         {
           hostname: "127.0.0.1",
           port: address.port,
-          path: "/sessions?token=secret",
-          method: "GET",
+          path: "/mcp",
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
         },
         (response) => {
           response.on("data", () => {})
@@ -280,6 +282,7 @@ describe("StreamableHttpServer", () => {
         },
       )
       req.on("error", reject)
+      req.write("{}")
       req.end()
     })
 
@@ -297,8 +300,45 @@ describe("StreamableHttpServer", () => {
       req.end()
     })
 
-    expect(sessionsRes.statusCode).toBe(200)
+    expect(mcpRes.statusCode).toBe(401)
     expect(healthRes.statusCode).toBe(200)
+  })
+
+  it("should reject wrong auth header token", async () => {
+    vi.useRealTimers()
+    server = new StreamableHttpServer({
+      port: 0,
+      enableRequestLogging: false,
+      authToken: "secret",
+      authHeaderName: "x-api-token",
+    })
+    await server.start()
+
+    // @ts-expect-error - private property access
+    const httpServer = server.server as http.Server
+    const address = httpServer.address() as { port: number }
+
+    const sessionsRes = await new Promise<{ statusCode: number }>((resolve, reject) => {
+      const req = http.request(
+        {
+          hostname: "127.0.0.1",
+          port: address.port,
+          path: "/sessions",
+          method: "GET",
+          headers: { "x-api-token": "wrong" },
+        },
+        (response) => {
+          response.on("data", () => {})
+          response.on("end", () => {
+            resolve({ statusCode: response.statusCode! })
+          })
+        },
+      )
+      req.on("error", reject)
+      req.end()
+    })
+
+    expect(sessionsRes.statusCode).toBe(401)
   })
 
   it("should allow custom header token authentication", async () => {

@@ -1,22 +1,20 @@
-version: "3.9"
-
 services:
   mcp-picnic:
     container_name: mcp-picnic
     hostname: mcp-picnic
-    image: ghcr.io/l480/mcp-picnic:latest
-    user: "1638"
+    image: ghcr.io/ivo-toby/mcp-picnic:latest
     restart: unless-stopped
+    env_file:
+      - .env
     environment:
       ENABLE_HTTP_SERVER: "true"
       HTTP_HOST: "0.0.0.0"
       HTTP_PORT: "3000"
-      HTTP_AUTH_TOKEN: "CHANGE_ME_SECURE_TOKEN"
-      HTTP_AUTH_HEADER_NAME: "x-mcp-token"
-      PICNIC_SESSION_FILE: "/opt/mcp-picnic/picnic-session.json"
-      PICNIC_USERNAME: "USERNAME"
-      PICNIC_PASSWORD: "PASSWORD"
-      PICNIC_COUNTRY_CODE: "DE"
+      HTTP_AUTH_TOKEN: ${HTTP_AUTH_TOKEN:?set this in .env}
+      HTTP_AUTH_HEADER_NAME: ${HTTP_AUTH_HEADER_NAME:-x-mcp-token}
+      PICNIC_USERNAME: ${PICNIC_USERNAME:?set this in .env}
+      PICNIC_PASSWORD: ${PICNIC_PASSWORD:?set this in .env}
+      PICNIC_COUNTRY_CODE: ${PICNIC_COUNTRY_CODE:-NL}
     healthcheck:
       test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:3000/health').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"]
       interval: 30s
@@ -24,6 +22,9 @@ services:
       retries: 3
       start_period: 20s
     volumes:
-      - /opt/mcp-picnic:/opt/mcp-picnic
+      - picnic-data:/app/data
     ports:
       - "3000:3000"
+
+volumes:
+  picnic-data:

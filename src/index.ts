@@ -7,14 +7,7 @@ import { initializePicnicClient } from "./utils/picnic-client.js"
 
 // Create and start the appropriate server
 async function runServer() {
-  try {
-    await initializePicnicClient()
-  } catch (error) {
-    console.error(
-      "Picnic client pre-initialization failed. Server will continue running; authentication can be completed via tools.",
-      error,
-    )
-  }
+  await initializePicnicClient()
 
   if (config.ENABLE_HTTP_SERVER) {
     // Start HTTP server

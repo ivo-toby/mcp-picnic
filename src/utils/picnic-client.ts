@@ -6,16 +6,42 @@ import { config } from "../config.js"
 let picnicClientInstance: InstanceType<typeof PicnicClient> | null = null
 
 function isTwoFactorAuthenticationError(error: unknown): boolean {
-  if (!(error instanceof Error)) {
+  if (!error || typeof error !== "object") {
     return false
   }
 
-  const normalizedMessage = error.message.toLowerCase()
+  const maybeError = error as {
+    code?: unknown
+    type?: unknown
+    second_factor_authentication_required?: unknown
+    message?: unknown
+  }
+
+  if (maybeError.second_factor_authentication_required === true) {
+    return true
+  }
+
+  if (typeof maybeError.code === "string" && /2fa|mfa|second[_ ]factor/i.test(maybeError.code)) {
+    return true
+  }
+
+  if (typeof maybeError.type === "string" && /2fa|mfa|second[_ ]factor/i.test(maybeError.type)) {
+    return true
+  }
+
+  if (typeof maybeError.message !== "string") {
+    return false
+  }
+
+  // NOTE: picnic-api does not currently expose a stable 2FA error shape in all failure paths.
+  // Keep this message fallback to tolerate known wording variants from upstream.
+  const normalizedMessage = maybeError.message.toLowerCase()
   return (
     normalizedMessage.includes("2fa") ||
     normalizedMessage.includes("mfa") ||
     normalizedMessage.includes("second_factor") ||
-    normalizedMessage.includes("second factor")
+    normalizedMessage.includes("second factor") ||
+    normalizedMessage.includes("totp")
   )
 }
 

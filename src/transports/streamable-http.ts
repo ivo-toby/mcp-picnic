@@ -5,7 +5,7 @@ import { isInitializeRequest } from "@modelcontextprotocol/sdk/types.js"
 import { BaseTransportServer } from "./base.js"
 import { TransportError, ErrorCode, ErrorUtils } from "../types/errors.js"
 import { createRateLimitMiddleware, RateLimitConfig } from "../utils/rate-limiter.js"
-import { randomUUID } from "crypto"
+import { randomUUID, timingSafeEqual } from "crypto"
 
 /**
  * Configuration options for the HTTP server
@@ -90,42 +90,40 @@ export class StreamableHttpServer extends BaseTransportServer {
       })
     }
 
+    // Rate limiting middleware
+    if (this.options.rateLimitConfig) {
+      this.rateLimiter = createRateLimitMiddleware(this.options.rateLimitConfig)
+      this.app.use(this.rateLimiter.middleware)
+    }
+
     if (this.options.authToken) {
       this.app.use((req: Request, res: Response, next: NextFunction) => {
         if (req.path === "/health") {
           return next()
         }
 
-        const requestToken = req.query.token
         const headerName = this.options.authHeaderName ?? "x-mcp-token"
         const headerToken = req.header(headerName)
         const authorizationHeader = req.header("authorization")
 
-        const queryTokenValid =
-          typeof requestToken === "string" && requestToken === this.options.authToken
-        const headerTokenValid = typeof headerToken === "string" && headerToken === this.options.authToken
+        const headerTokenValid = this.compareAuthTokens(headerToken)
         const bearerTokenValid =
           typeof authorizationHeader === "string" &&
-          authorizationHeader === `Bearer ${this.options.authToken}`
+          authorizationHeader.startsWith("Bearer ") &&
+          this.compareAuthTokens(authorizationHeader.slice(7))
 
-        const hasValidToken = queryTokenValid || headerTokenValid || bearerTokenValid
+        const hasValidToken = headerTokenValid || bearerTokenValid
 
         if (!hasValidToken) {
           return res.status(401).json({
             error: "Unauthorized",
             message:
-              "Missing or invalid authentication token. Provide ?token=... or a valid auth header.",
+              "Missing or invalid authentication token. Provide a valid auth header.",
           })
         }
 
         return next()
       })
-    }
-
-    // Rate limiting middleware
-    if (this.options.rateLimitConfig) {
-      this.rateLimiter = createRateLimitMiddleware(this.options.rateLimitConfig)
-      this.app.use(this.rateLimiter.middleware)
     }
 
     // Request timeout middleware
@@ -213,6 +211,20 @@ export class StreamableHttpServer extends BaseTransportServer {
         id: null,
       })
     })
+  }
+
+  private compareAuthTokens(token: string | undefined): boolean {
+    if (!this.options.authToken || typeof token !== "string") {
+      return false
+    }
+
+    const provided = Buffer.from(token)
+    const expected = Buffer.from(this.options.authToken)
+    if (provided.length !== expected.length) {
+      return false
+    }
+
+    return timingSafeEqual(provided, expected)
   }
 
   /**
