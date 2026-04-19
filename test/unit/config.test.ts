@@ -63,7 +63,7 @@ describe("Config Schema - PICNIC_COUNTRY_CODE (Issue #10 regression)", () => {
         configSchema.parse({
           PICNIC_USERNAME: "test-user",
           PICNIC_PASSWORD: "test-pass",
-          PICNIC_COUNTRY_CODE: "FR", // Invalid country code
+          PICNIC_COUNTRY_CODE: "FR",
         })
       }).toThrow()
     })

@@ -71,11 +71,11 @@ with no new features.
 v4 `HttpClient` exposes `authKey` and `url` as public properties.
 Remove `as any` casts in `picnic-client.ts` and the 2FA verify handler.
 
-## 2FA Verify Bypass
+## 2FA Verification
 
-Keep the raw `fetch()` bypass in `picnic_verify_2fa_code` — it captures
-response headers that `sendRequest` does not expose. A GitHub issue will
-be created to revisit this after upgrade.
+Use `client.auth.verify2FACode()` directly. `picnic-api` 4.0.1+
+captures the refreshed auth token from the response headers, so the MCP
+server no longer needs a custom `fetch()` bypass.
 
 ## Open Questions
 
