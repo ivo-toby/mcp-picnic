@@ -29,18 +29,26 @@ function filterCartData(cart: unknown) {
   const cartObj = cart as {
     type?: string
     id?: string
-    items?: Array<{
-      id?: string
-      display_price?: number
-      price?: number
       items?: Array<{
         id?: string
-        name?: string
-        unit_quantity?: string
+        display_price?: number
         price?: number
-        image_ids?: string[]
-        max_count?: number
-      }>
+        decorators?: Array<{
+          type?: string
+          text?: string
+        }>
+        items?: Array<{
+          id?: string
+          name?: string
+          unit_quantity?: string
+          price?: number
+          price_ranges?: Array<{
+            from_quantity?: number
+            price?: number
+          }>
+          image_ids?: string[]
+          max_count?: number
+        }>
     }>
     total_count?: number
     total_price?: number
@@ -51,11 +59,13 @@ function filterCartData(cart: unknown) {
   const filteredItems = cartObj.items?.map((orderLine) => ({
     order_line_id: orderLine.id,
     price: orderLine.display_price || orderLine.price,
+    ...(orderLine.decorators?.length && { decorators: orderLine.decorators }),
     articles: orderLine.items?.map((article) => ({
       product_id: article.id,
       name: article.name,
       unit: article.unit_quantity,
       price: article.price,
+      ...(article.price_ranges?.length && { bundle_prices: article.price_ranges }),
       ...(article.image_ids?.length && { image_id: article.image_ids[0] }),
     })),
   }))
@@ -145,8 +155,8 @@ toolRegistry.register({
   },
 })
 
-// Note: picnic_get_article tool removed - endpoint deprecated (GitHub issue #23)
-// Use picnic_search instead for basic product information
+// Product details are exposed through picnic_get_product_details, which wraps
+// the v4 catalog product details endpoint and returns an LLM-friendly subset by default.
 
 // Get product details tool
 const productDetailsInputSchema = z.object({
@@ -184,6 +194,7 @@ toolRegistry.register({
       brand: details.brand,
       price: details.displayPrice,
       unit: details.unitQuantity,
+      ...(details.priceRanges?.length && { bundle_prices: details.priceRanges }),
       ...(details.imageIds.length > 0 && { image_id: details.imageIds[0] }),
     }
   },
@@ -604,31 +615,7 @@ toolRegistry.register({
     await ensureClientInitialized()
     const client = getPicnicClient()
 
-    // We bypass client.verify2FACode() because sendRequest doesn't capture response headers.
-    // The Picnic API may return an updated authKey in x-picnic-auth after 2FA verification.
-    const url = client.url
-    const authKey = client.authKey
-    const response = await fetch(`${url}/user/2fa/verify`, {
-      method: "POST",
-      headers: {
-        "User-Agent": "okhttp/3.12.2",
-        "Content-Type": "application/json; charset=UTF-8",
-        ...(authKey && { "x-picnic-auth": authKey }),
-        "x-picnic-agent": "30100;1.15.232-15154",
-        "x-picnic-did": "3C417201548B2E3B",
-      },
-      body: JSON.stringify({ otp: args.code }),
-    })
-
-    if (!response.ok) {
-      throw new Error(`2FA verification failed: ${response.status} ${response.statusText}`)
-    }
-
-    // Capture updated auth key if the API returns one
-    const newAuthKey = response.headers.get("x-picnic-auth")
-    if (newAuthKey) {
-      client.authKey = newAuthKey
-    }
+    await client.auth.verify2FACode(args.code)
 
     await saveSession()
     return {
@@ -637,4 +624,3 @@ toolRegistry.register({
     }
   },
 })
-

@@ -10,7 +10,7 @@ const defaultSessionFile = path.join(os.homedir(), ".picnic-session.json")
 const configSchema = z.object({
   PICNIC_USERNAME: z.string(),
   PICNIC_PASSWORD: z.string(),
-  PICNIC_COUNTRY_CODE: z.enum(["NL", "DE", "FR"]).default("NL"),
+  PICNIC_COUNTRY_CODE: z.enum(["NL", "DE"]).default("NL"),
   ENABLE_HTTP_SERVER: z
     .string()
     .transform((val) => val === "true")

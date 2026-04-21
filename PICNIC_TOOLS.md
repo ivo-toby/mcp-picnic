@@ -42,25 +42,34 @@ Get product suggestions based on a query.
 
 - `query` (string): Query for product suggestions
 
-#### ~~`picnic_get_article`~~ (REMOVED)
+#### `picnic_get_product_details`
 
-**This tool has been removed** because the Picnic API deprecated product detail endpoints. See [GitHub issue #23](https://github.com/MRVDH/picnic-api/issues/23).
-
-**Alternative:** Use `picnic_search` to get basic product information (id, name, price, unit).
-
-#### `picnic_get_categories`
-
-Get product categories from Picnic.
+Look up product details by selling unit ID.
 
 **Parameters:**
 
-- `depth` (number, optional): Category depth to retrieve (0-5, default: 0)
+- `productId` (string): The selling unit ID to inspect
+- `full` (boolean, optional): Return full product details including description, allergens, ingredients, similar products, and bundle discount pricing when available
+
+#### `picnic_get_image`
+
+Get image data for a product using the image ID and size.
+
+**Parameters:**
+
+- `imageId` (string): The image ID to retrieve
+- `size` (string): One of `tiny`, `small`, `medium`, `large`, `extra-large`
 
 ### Shopping Cart Management
 
 #### `picnic_get_cart`
 
 Get the current shopping cart contents.
+
+**Notes:**
+
+- Includes `total_savings` when Picnic returns bundle discount savings
+- Articles may include `bundle_prices` when lower per-unit prices apply at higher quantities
 
 #### `picnic_add_to_cart`
 
@@ -83,6 +92,22 @@ Remove a product from the shopping cart.
 #### `picnic_clear_cart`
 
 Clear all items from the shopping cart.
+
+#### `picnic_send_delivery_invoice_email`
+
+Send or resend the invoice email for a completed delivery.
+
+**Parameters:**
+
+- `deliveryId` (string): The ID of the delivery to send the invoice email for
+
+#### `picnic_get_order_status`
+
+Get the status of a specific order.
+
+**Parameters:**
+
+- `orderId` (string): The ID of the order to inspect
 
 ### Delivery Management
 
@@ -157,26 +182,6 @@ Get details of the current logged-in user.
 
 Get user information including toggled features.
 
-### Lists Management
-
-#### `picnic_get_lists`
-
-Get shopping lists and sublists.
-
-**Parameters:**
-
-- `depth` (number, optional): List depth to retrieve (0-5, default: 0)
-
-#### `picnic_get_list`
-
-Get a specific list or sublist with its items.
-
-**Parameters:**
-
-- `listId` (string): The ID of the list to get
-- `subListId` (string, optional): The ID of the sub list to get
-- `depth` (number, optional): List depth to retrieve (0-5, default: 0)
-
 ### Payment & Transactions
 
 #### `picnic_get_payment_profile`
@@ -198,12 +203,6 @@ Get detailed information about a specific wallet transaction.
 **Parameters:**
 
 - `transactionId` (string): The ID of the transaction to get details for
-
-### Other
-
-#### `picnic_get_mgm_details`
-
-Get MGM (friends discount) details.
 
 ## Usage Example
 

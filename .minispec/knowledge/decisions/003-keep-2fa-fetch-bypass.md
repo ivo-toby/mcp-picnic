@@ -1,25 +1,25 @@
 ---
 id: "003"
-title: Keep raw fetch bypass for 2FA verification
-status: accepted
-date: 2026-03-06
+title: Use upstream 2FA verification support
+status: superseded
+date: 2026-04-19
 context: picnic-api-v4-upgrade
 ---
 
-# Keep raw fetch bypass for 2FA verification
+# Use upstream 2FA verification support
 
 ## Context
 
-`picnic_verify_2fa_code` bypasses `client.verify2FACode()` with a raw
-`fetch()` call to capture the `x-picnic-auth` response header. The
-upstream `sendRequest` does not expose response headers.
+`picnic-api` 4.0.1 updated `client.auth.verify2FACode()` to capture the
+refreshed `x-picnic-auth` token returned by Picnic after successful 2FA.
+The MCP server no longer needs a raw `fetch()` bypass to complete 2FA.
 
 ## Decision
 
-Keep the raw fetch bypass. Create a GitHub issue to revisit this after
-the upgrade (either upstream fix or local improvement).
+Replace the local raw `fetch()` bypass with `client.auth.verify2FACode()`
+and persist the refreshed session after verification.
 
 ## Rationale
 
-Safe upgrade path — changing the 2FA flow during a dependency upgrade
-adds unnecessary risk. The bypass works and is well-documented in code.
+The upstream library now handles the auth token refresh correctly, so the
+custom HTTP path is unnecessary duplication and a maintenance burden.
