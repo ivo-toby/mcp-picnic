@@ -49,7 +49,7 @@ Look up product details by selling unit ID.
 **Parameters:**
 
 - `productId` (string): The selling unit ID to inspect
-- `full` (boolean, optional): Return full product details including description, allergens, ingredients, and similar products
+- `full` (boolean, optional): Return full product details including description, allergens, ingredients, similar products, and bundle discount pricing when available
 
 #### `picnic_get_image`
 
@@ -65,6 +65,11 @@ Get image data for a product using the image ID and size.
 #### `picnic_get_cart`
 
 Get the current shopping cart contents.
+
+**Notes:**
+
+- Includes `total_savings` when Picnic returns bundle discount savings
+- Articles may include `bundle_prices` when lower per-unit prices apply at higher quantities
 
 #### `picnic_add_to_cart`
 
@@ -87,6 +92,22 @@ Remove a product from the shopping cart.
 #### `picnic_clear_cart`
 
 Clear all items from the shopping cart.
+
+#### `picnic_send_delivery_invoice_email`
+
+Send or resend the invoice email for a completed delivery.
+
+**Parameters:**
+
+- `deliveryId` (string): The ID of the delivery to send the invoice email for
+
+#### `picnic_get_order_status`
+
+Get the status of a specific order.
+
+**Parameters:**
+
+- `orderId` (string): The ID of the order to inspect
 
 ### Delivery Management
 

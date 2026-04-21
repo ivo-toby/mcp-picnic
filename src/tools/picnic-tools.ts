@@ -29,18 +29,26 @@ function filterCartData(cart: unknown) {
   const cartObj = cart as {
     type?: string
     id?: string
-    items?: Array<{
-      id?: string
-      display_price?: number
-      price?: number
       items?: Array<{
         id?: string
-        name?: string
-        unit_quantity?: string
+        display_price?: number
         price?: number
-        image_ids?: string[]
-        max_count?: number
-      }>
+        decorators?: Array<{
+          type?: string
+          text?: string
+        }>
+        items?: Array<{
+          id?: string
+          name?: string
+          unit_quantity?: string
+          price?: number
+          price_ranges?: Array<{
+            from_quantity?: number
+            price?: number
+          }>
+          image_ids?: string[]
+          max_count?: number
+        }>
     }>
     total_count?: number
     total_price?: number
@@ -51,11 +59,13 @@ function filterCartData(cart: unknown) {
   const filteredItems = cartObj.items?.map((orderLine) => ({
     order_line_id: orderLine.id,
     price: orderLine.display_price || orderLine.price,
+    ...(orderLine.decorators?.length && { decorators: orderLine.decorators }),
     articles: orderLine.items?.map((article) => ({
       product_id: article.id,
       name: article.name,
       unit: article.unit_quantity,
       price: article.price,
+      ...(article.price_ranges?.length && { bundle_prices: article.price_ranges }),
       ...(article.image_ids?.length && { image_id: article.image_ids[0] }),
     })),
   }))
@@ -184,6 +194,7 @@ toolRegistry.register({
       brand: details.brand,
       price: details.displayPrice,
       unit: details.unitQuantity,
+      ...(details.priceRanges?.length && { bundle_prices: details.priceRanges }),
       ...(details.imageIds.length > 0 && { image_id: details.imageIds[0] }),
     }
   },

@@ -483,12 +483,12 @@ The server provides comprehensive access to Picnic's functionality through 25+ s
 
 - **`picnic_search`** - Search for products by name or keywords
 - **`picnic_get_suggestions`** - Get product suggestions based on query
-- **`picnic_get_product_details`** - Get product details by selling unit ID
+- **`picnic_get_product_details`** - Get product details by selling unit ID, including bundle pricing when available
 - **`picnic_get_image`** - Get product images in various sizes (tiny to extra-large)
 
 ### Shopping Cart Management
 
-- **`picnic_get_cart`** - View current shopping cart contents and totals
+- **`picnic_get_cart`** - View current shopping cart contents, totals, and bundle discount savings when available
 - **`picnic_add_to_cart`** - Add products to cart with specified quantities
 - **`picnic_remove_from_cart`** - Remove products from cart with specified quantities
 - **`picnic_clear_cart`** - Clear all items from the shopping cart
