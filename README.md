@@ -523,6 +523,15 @@ The server provides comprehensive access to Picnic's functionality through 25+ s
 - **`picnic_get_wallet_transaction_details`** - Get detailed transaction information
 - **`picnic_get_mgm_details`** - Get MGM (friends discount) program details
 
+### Recipes
+
+- **`picnic_get_recipes`** - Get the recipes overview page (Fusion page with available recipes)
+- **`picnic_get_recipe_details`** - Get detail page for a recipe (ingredients, steps, servings, pricing)
+- **`picnic_save_recipe`** - Save a recipe to the user's saved recipes list
+- **`picnic_unsave_recipe`** - Remove a recipe from the user's saved recipes list
+- **`picnic_add_product_to_recipe`** - Add a product to the cart in the context of a recipe
+- **`picnic_remove_product_from_recipe`** - Remove a product from the cart in the context of a recipe
+
 ## Development
 
 ### Running in Development Mode

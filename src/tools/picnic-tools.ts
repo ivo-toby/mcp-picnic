@@ -638,3 +638,152 @@ toolRegistry.register({
   },
 })
 
+// Recipe tools
+//
+// The Picnic recipe overview and detail endpoints return a `FusionPage` —
+// a deeply nested PML (Picnic Markup Language) tree that describes the
+// rendered UI rather than a clean data model. The full payload is large
+// and not directly useful for LLM consumption, but its shape is also not
+// a stable contract we should pre-flatten on the user's behalf. We return
+// it as-is and let the caller navigate it; if a stable subset emerges we
+// can add a filtered projection here, similar to the cart/search filters above.
+
+// Get recipes overview tool
+toolRegistry.register({
+  name: "picnic_get_recipes",
+  description:
+    "Get the recipes overview page from Picnic. Returns a Fusion page listing " +
+    "available recipes, categories, and promotions. The response is a complex " +
+    "PML (Picnic Markup Language) tree; recipe IDs can typically be found in " +
+    "`analytics.contexts` and in the tracking attributes of embedded PML items.",
+  inputSchema: z.object({}),
+  handler: async () => {
+    await ensureClientInitialized()
+    const client = getPicnicClient()
+    const page = await client.recipe.getRecipesPage()
+    return page
+  },
+})
+
+// Get recipe details tool
+const recipeDetailsInputSchema = z.object({
+  recipeId: z.string().describe("The ID of the recipe to get details for"),
+})
+
+toolRegistry.register({
+  name: "picnic_get_recipe_details",
+  description:
+    "Get the detail page for a single recipe by ID. Returns a Fusion page " +
+    "containing ingredients, cooking steps, servings, cooking time, and pricing.",
+  inputSchema: recipeDetailsInputSchema,
+  handler: async (args) => {
+    await ensureClientInitialized()
+    const client = getPicnicClient()
+    const page = await client.recipe.getRecipeDetailsPage(args.recipeId)
+    return page
+  },
+})
+
+// Save recipe tool
+const saveRecipeInputSchema = z.object({
+  recipeId: z.string().describe("The ID of the recipe to save"),
+})
+
+toolRegistry.register({
+  name: "picnic_save_recipe",
+  description: "Save a recipe to the user's saved recipes list",
+  inputSchema: saveRecipeInputSchema,
+  handler: async (args) => {
+    await ensureClientInitialized()
+    const client = getPicnicClient()
+    await client.recipe.saveRecipe(args.recipeId)
+    return {
+      message: "Recipe saved",
+      recipeId: args.recipeId,
+    }
+  },
+})
+
+// Unsave recipe tool
+const unsaveRecipeInputSchema = z.object({
+  recipeId: z.string().describe("The ID of the recipe to unsave"),
+})
+
+toolRegistry.register({
+  name: "picnic_unsave_recipe",
+  description: "Remove a recipe from the user's saved recipes list",
+  inputSchema: unsaveRecipeInputSchema,
+  handler: async (args) => {
+    await ensureClientInitialized()
+    const client = getPicnicClient()
+    await client.recipe.unsaveRecipe(args.recipeId)
+    return {
+      message: "Recipe unsaved",
+      recipeId: args.recipeId,
+    }
+  },
+})
+
+// Add product to recipe tool
+const addProductToRecipeInputSchema = z.object({
+  productId: z.string().describe("The selling-unit / article ID of the product to add"),
+  recipeId: z.string().describe("The ID of the recipe the product belongs to"),
+  sectionId: z.string().optional().describe("The section within the recipe (optional)"),
+  count: z.number().min(1).default(1).describe("Number of items to add (default: 1)"),
+})
+
+toolRegistry.register({
+  name: "picnic_add_product_to_recipe",
+  description:
+    "Add a product to the shopping cart in the context of a recipe. Includes " +
+    "the recipe context so Picnic's recipe stepper UI and analytics know the " +
+    "addition originated from a recipe.",
+  inputSchema: addProductToRecipeInputSchema,
+  handler: async (args) => {
+    await ensureClientInitialized()
+    const client = getPicnicClient()
+    const cart = await client.recipe.addProductToRecipe(
+      args.productId,
+      args.recipeId,
+      args.sectionId,
+      args.count,
+    )
+    return {
+      message: `Added ${args.count} item(s) to cart from recipe`,
+      recipeId: args.recipeId,
+      cart: filterCartData(cart),
+    }
+  },
+})
+
+// Remove product from recipe tool
+const removeProductFromRecipeInputSchema = z.object({
+  productId: z.string().describe("The selling-unit / article ID of the product to remove"),
+  recipeId: z.string().describe("The ID of the recipe the product belongs to"),
+  sectionId: z.string().optional().describe("The section within the recipe (optional)"),
+  count: z.number().min(1).default(1).describe("Number of items to remove (default: 1)"),
+})
+
+toolRegistry.register({
+  name: "picnic_remove_product_from_recipe",
+  description:
+    "Remove a product from the shopping cart in the context of a recipe. " +
+    "Includes the recipe context for analytics and the recipe stepper UI.",
+  inputSchema: removeProductFromRecipeInputSchema,
+  handler: async (args) => {
+    await ensureClientInitialized()
+    const client = getPicnicClient()
+    const cart = await client.recipe.removeProductFromRecipe(
+      args.productId,
+      args.recipeId,
+      args.sectionId,
+      args.count,
+    )
+    return {
+      message: `Removed ${args.count} item(s) from cart in recipe`,
+      recipeId: args.recipeId,
+      cart: filterCartData(cart),
+    }
+  },
+})
+

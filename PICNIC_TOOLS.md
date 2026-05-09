@@ -199,6 +199,58 @@ Get detailed information about a specific wallet transaction.
 
 - `transactionId` (string): The ID of the transaction to get details for
 
+### Recipes
+
+#### `picnic_get_recipes`
+
+Get the recipes overview page from Picnic. Returns a Fusion page listing available recipes, categories, and promotions. The response is a complex PML (Picnic Markup Language) tree; recipe IDs can typically be found in `analytics.contexts` and in the tracking attributes of embedded PML items.
+
+#### `picnic_get_recipe_details`
+
+Get the detail page for a single recipe by ID. Returns a Fusion page containing ingredients, cooking steps, servings, cooking time, and pricing.
+
+**Parameters:**
+
+- `recipeId` (string): The ID of the recipe to get details for
+
+#### `picnic_save_recipe`
+
+Save a recipe to the user's saved recipes list.
+
+**Parameters:**
+
+- `recipeId` (string): The ID of the recipe to save
+
+#### `picnic_unsave_recipe`
+
+Remove a recipe from the user's saved recipes list.
+
+**Parameters:**
+
+- `recipeId` (string): The ID of the recipe to unsave
+
+#### `picnic_add_product_to_recipe`
+
+Add a product to the shopping cart in the context of a recipe. Includes the recipe context so Picnic's recipe stepper UI and analytics know the addition originated from a recipe.
+
+**Parameters:**
+
+- `productId` (string): The selling-unit / article ID of the product to add
+- `recipeId` (string): The ID of the recipe the product belongs to
+- `sectionId` (string, optional): The section within the recipe
+- `count` (number, optional): Number of items to add (default: 1)
+
+#### `picnic_remove_product_from_recipe`
+
+Remove a product from the shopping cart in the context of a recipe. Includes the recipe context for analytics and the recipe stepper UI.
+
+**Parameters:**
+
+- `productId` (string): The selling-unit / article ID of the product to remove
+- `recipeId` (string): The ID of the recipe the product belongs to
+- `sectionId` (string, optional): The section within the recipe
+- `count` (number, optional): Number of items to remove (default: 1)
+
 ### Other
 
 #### `picnic_get_mgm_details`
