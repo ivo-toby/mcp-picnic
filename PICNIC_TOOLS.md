@@ -201,9 +201,42 @@ Get detailed information about a specific wallet transaction.
 
 ### Recipes
 
+Picnic's recipe endpoints return Fusion pages (a layout tree); the listing tool walks that tree and returns a small per-recipe summary by default. Pass `full: true` to get the raw response, or call `picnic_get_recipe_details` for ingredients and steps.
+
 #### `picnic_get_recipes`
 
-Get the recipes overview page from Picnic. Returns a Fusion page listing available recipes, categories, and promotions. The response is a complex PML (Picnic Markup Language) tree; recipe IDs can typically be found in `analytics.contexts` and in the tracking attributes of embedded PML items.
+Browse recipes from the Picnic cookbook.
+
+- Without a `category`: returns the cookbook highlights (~30 recipes) plus the list of available category IDs (e.g. `20minuten`, `vega`, `eenpans`).
+- With a `category`: returns the recipes in that category. A single category can contain hundreds of recipes; use `limit`/`offset` to page through.
+
+**Parameters:**
+
+- `category` (string, optional): Category ID (e.g. `"20minuten"`) or full page ID (e.g. `"recipe_cattree_20minuten"`)
+- `limit` (number, optional): Maximum number of recipes to return (1-100, default: 20)
+- `offset` (number, optional): Number of recipes to skip for pagination (default: 0)
+- `full` (boolean, optional): When `true`, returns the raw FusionPage instead of a filtered list (default: `false`)
+
+**Filtered response shape:**
+
+```json
+{
+  "pageId": "cookbook-page-content",
+  "recipes": [
+    {
+      "recipe_id": "69a6d2ab92f7b13019c86579",
+      "title": "Kip-kormaballetjes met mangosalsa",
+      "cooking_time": "20 min",
+      "tagline": "Tropische verrassing",
+      "image_id": "recipes/28860cbeaf..."
+    }
+  ],
+  "pagination": { "offset": 0, "limit": 20, "returned": 20, "total": 30, "hasMore": true },
+  "categories": ["20minuten", "vega", "eenpans"]
+}
+```
+
+The `categories` field is only present on the cookbook root (when `category` is omitted).
 
 #### `picnic_get_recipe_details`
 

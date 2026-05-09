@@ -640,28 +640,238 @@ toolRegistry.register({
 
 // Recipe tools
 //
-// The Picnic recipe overview and detail endpoints return a `FusionPage` —
-// a deeply nested PML (Picnic Markup Language) tree that describes the
-// rendered UI rather than a clean data model. The full payload is large
-// and not directly useful for LLM consumption, but its shape is also not
-// a stable contract we should pre-flatten on the user's behalf. We return
-// it as-is and let the caller navigate it; if a stable subset emerges we
-// can add a filtered projection here, similar to the cart/search filters above.
+// The Picnic recipe endpoints return a `FusionPage` — a deeply nested PML
+// (Picnic Markup Language) tree that describes the rendered UI rather than
+// a clean data model. The raw payload is large (a single category page
+// returns 700+ recipes embedded in the layout tree) and not directly useful
+// for LLM consumption, so for the listing endpoints we walk the tree and
+// project a small per-recipe summary. The detail endpoint returns the raw
+// page since its content (ingredients, steps) has no stable subset yet.
+//
+// The picnic-api `recipe.getRecipesPage()` method targets `meals-page-root`,
+// which is only the navigation shell with three SUSPENSE tabs. The actual
+// recipe content lives one level deeper:
+//   - `cookbook-page-content`        → 30 highlighted recipes + category links
+//   - `recipe_cattree_<category>`    → all recipes in a single category
+// We hit those directly via `client.app.getPage(pageId)`.
 
-// Get recipes overview tool
+/**
+ * A single recipe extracted from a Picnic Fusion page.
+ *
+ * Fields are best-effort: `recipe_id` is reliable (it comes from the
+ * Snowplow analytics context Picnic attaches to every recipe block);
+ * `title`, `cooking_time`, `tagline`, and `image_id` are derived from
+ * heuristics on the surrounding PML and may be absent if the layout
+ * changes.
+ */
+interface RecipeSummary {
+  recipe_id: string
+  title?: string
+  cooking_time?: string
+  tagline?: string
+  image_id?: string
+}
+
+/** Strip Picnic's inline color markers like `#(#295813)Tropisch#(#295813)`. */
+function stripColorMarkers(s: string): string {
+  return s.replace(/#\(#[0-9a-fA-F]{3,8}\)/g, "").trim()
+}
+
+/**
+ * Walks a FusionPage tree and returns one summary per recipe block.
+ *
+ * Picnic tags every recipe with an analytics context whose `data.recipe_id`
+ * is the stable recipe ID. We find each such block, then collect every
+ * RICH_TEXT and IMAGE descendant within it to derive a human-readable
+ * title, cooking time, optional tagline, and lead image.
+ *
+ * Title heuristic: longest plain markdown string in the block (works for
+ * both the cookbook layout — `[tagline, title, time]` — and the category
+ * layout — `[title, time, "Nieuw"]`). Cooking time: a string matching
+ * `<digits> min[uten]`.
+ */
+function extractRecipesFromPage(page: unknown): RecipeSummary[] {
+  const out: RecipeSummary[] = []
+  const seen = new Set<string>()
+
+  const visit = (node: unknown): void => {
+    if (!node || typeof node !== "object") return
+    const obj = node as Record<string, unknown>
+
+    const analytics = obj.analytics as { contexts?: Array<{ data?: Record<string, unknown> }> } | undefined
+    const recipeContext = analytics?.contexts?.find(
+      (c) => typeof c?.data?.recipe_id === "string",
+    )
+
+    if (recipeContext) {
+      const recipeId = recipeContext.data!.recipe_id as string
+      if (!seen.has(recipeId)) {
+        seen.add(recipeId)
+        const texts: string[] = []
+        const images: string[] = []
+        const gather = (n: unknown): void => {
+          if (!n || typeof n !== "object") return
+          const m = n as Record<string, unknown>
+          if (m.type === "RICH_TEXT" && typeof m.markdown === "string") {
+            texts.push(stripColorMarkers(m.markdown))
+          }
+          if (m.type === "IMAGE") {
+            const src = m.source as { id?: string } | undefined
+            if (src?.id) images.push(src.id)
+          }
+          for (const v of Object.values(m)) {
+            if (Array.isArray(v)) v.forEach(gather)
+            else if (v && typeof v === "object") gather(v)
+          }
+        }
+        gather(node)
+
+        const cookingTime = texts.find((t) => /^\d+\s*min(uten)?$/i.test(t))
+        const candidates = texts.filter(
+          (t) => t && t !== cookingTime && t !== "Toevoegen" && t !== "Nieuw" && t !== "Niet alles op voorraad",
+        )
+        // Longest remaining candidate is the title; the next-longest (if any)
+        // is the tagline (only the cookbook layout supplies one).
+        const sorted = [...candidates].sort((a, b) => b.length - a.length)
+        const title = sorted[0]
+        const tagline = sorted[1]
+
+        const summary: RecipeSummary = { recipe_id: recipeId }
+        if (title) summary.title = title
+        if (cookingTime) summary.cooking_time = cookingTime
+        if (tagline && tagline !== title) summary.tagline = tagline
+        if (images[0]) summary.image_id = images[0]
+        out.push(summary)
+      }
+      // Don't descend into a recipe block — its inner items are duplicate
+      // analytics contexts for the same recipe.
+      return
+    }
+
+    for (const v of Object.values(obj)) {
+      if (Array.isArray(v)) v.forEach(visit)
+      else if (v && typeof v === "object") visit(v)
+    }
+  }
+
+  visit(page)
+  return out
+}
+
+/**
+ * Returns the list of recipe-category page IDs linked from a Fusion page.
+ * Picnic embeds them as deeplinks like
+ * `nl.picnic-supermarkt://store/page;id=recipe_cattree_20minuten`.
+ * The returned IDs strip the `recipe_cattree_` / `recipe-cattree-` prefix
+ * so callers can pass them straight back into `picnic_get_recipes`.
+ */
+function extractRecipeCategoryIds(page: unknown): string[] {
+  const found = new Set<string>()
+  const visit = (node: unknown): void => {
+    if (!node || typeof node !== "object") return
+    const obj = node as Record<string, unknown>
+    if (obj.actionType === "OPEN" && typeof obj.target === "string") {
+      const match = obj.target.match(/id=recipe[_-]cattree[_-]([a-z0-9_-]+)/i)
+      if (match) found.add(match[1])
+    }
+    for (const v of Object.values(obj)) {
+      if (Array.isArray(v)) v.forEach(visit)
+      else if (v && typeof v === "object") visit(v)
+    }
+  }
+  visit(page)
+  return [...found]
+}
+
+// Get recipes tool
+const getRecipesInputSchema = z.object({
+  category: z
+    .string()
+    .optional()
+    .describe(
+      "Optional recipe category ID (e.g. '20minuten', 'vega', 'eenpans'). " +
+        "When omitted, returns the cookbook highlights (~30 recipes) along with " +
+        "the list of available categories. When provided, returns the recipes " +
+        "in that category. Pass either the bare ID or a full 'recipe_cattree_xyz' / " +
+        "'recipe-cattree-xyz' page ID.",
+    ),
+  limit: z
+    .number()
+    .min(1)
+    .max(100)
+    .default(20)
+    .describe("Maximum number of recipes to return (1-100, default: 20)"),
+  offset: z
+    .number()
+    .min(0)
+    .default(0)
+    .describe("Number of recipes to skip for pagination (default: 0)"),
+  full: z
+    .boolean()
+    .default(false)
+    .describe(
+      "When false (default), returns a filtered list of {recipe_id, title, " +
+        "cooking_time, tagline?, image_id?}. When true, returns the raw FusionPage.",
+    ),
+})
+
 toolRegistry.register({
   name: "picnic_get_recipes",
   description:
-    "Get the recipes overview page from Picnic. Returns a Fusion page listing " +
-    "available recipes, categories, and promotions. The response is a complex " +
-    "PML (Picnic Markup Language) tree; recipe IDs can typically be found in " +
-    "`analytics.contexts` and in the tracking attributes of embedded PML items.",
-  inputSchema: z.object({}),
-  handler: async () => {
+    "Browse recipes from the Picnic cookbook. Without a category, returns " +
+    "highlighted recipes plus the list of available categories. With a " +
+    "category, returns the recipes in that category (a single category can " +
+    "contain hundreds of recipes; use limit/offset to page through). Use " +
+    "`picnic_get_recipe_details` afterwards to get ingredients and steps for a " +
+    "specific recipe.",
+  inputSchema: getRecipesInputSchema,
+  handler: async (args) => {
     await ensureClientInitialized()
     const client = getPicnicClient()
-    const page = await client.recipe.getRecipesPage()
-    return page
+
+    // Accept either a bare category id or a full page id; normalise to the
+    // page id Picnic expects. Picnic's IDs use both '_' and '-' as separators
+    // so we don't try to canonicalise — we pass through what the caller sent
+    // when it already contains the prefix.
+    let pageId: string
+    if (args.category) {
+      pageId = /^recipe[_-]cattree[_-]/i.test(args.category)
+        ? args.category
+        : `recipe_cattree_${args.category}`
+    } else {
+      pageId = "cookbook-page-content"
+    }
+
+    const page = await client.app.getPage(pageId)
+
+    if (args.full) {
+      return page
+    }
+
+    const allRecipes = extractRecipesFromPage(page)
+    const startIndex = args.offset ?? 0
+    const limit = args.limit ?? 20
+    const paginated = allRecipes.slice(startIndex, startIndex + limit)
+
+    const result: Record<string, unknown> = {
+      pageId,
+      recipes: paginated,
+      pagination: {
+        offset: startIndex,
+        limit,
+        returned: paginated.length,
+        total: allRecipes.length,
+        hasMore: startIndex + limit < allRecipes.length,
+      },
+    }
+
+    // Only the cookbook root carries category navigation; surface it so the
+    // LLM knows what to drill into next.
+    if (!args.category) {
+      result.categories = extractRecipeCategoryIds(page)
+    }
+
+    return result
   },
 })
 
