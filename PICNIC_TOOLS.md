@@ -240,11 +240,53 @@ The `categories` field is only present on the cookbook root (when `category` is 
 
 #### `picnic_get_recipe_details`
 
-Get the detail page for a single recipe by ID. Returns a Fusion page containing ingredients, cooking steps, servings, cooking time, and pricing.
+Get a structured projection of a single Picnic recipe — metadata, the four ingredient sections, numbered cooking steps, and the variation tip. Set `full: true` to get the raw 1.7MB FusionPage instead.
 
 **Parameters:**
 
-- `recipeId` (string): The ID of the recipe to get details for
+- `recipeId` (string): The recipe ID (as returned by `picnic_get_recipes`)
+- `full` (boolean, optional): When `true`, returns the raw FusionPage (default: `false`)
+
+**Filtered response shape:**
+
+```json
+{
+  "recipe_id": "69a6d2ab92f7b13019c86579",
+  "name": "Kip-kormaballetjes met mangosalsa",
+  "tagline": "Tropische verrassing",
+  "description": "Ook dit gerecht laat maar weer eens zien hoe goed zoet en hartig samengaan!",
+  "cooking_time": "20 min",
+  "portions": 1,
+  "image_id": "recipes/28860cbeaf...",
+  "ingredients": [
+    {
+      "selling_unit_id": "s1015074",
+      "ingredient_id": "00abaaf6-...",
+      "name": "Kipgehakt",
+      "brand": "'t Slagershuys",
+      "price": 399,
+      "unit_quantity": "300 gram",
+      "needed": "75 g",
+      "quantity": 1,
+      "checked": true
+    }
+  ],
+  "likely_in_stock": [{ "name": "Bio knoflook", "...": "..." }],
+  "pantry": [{ "name": "Zeezout", "brand": "Verstegen", "...": "..." }],
+  "complementary": [{ "name": "Jalapeno groene pepers", "...": "..." }],
+  "steps": ["Bereid de rijst...", "Doe het kipgehakt...", "..."],
+  "tip": "Hou je van pittig? Voeg dan een paar ringetjes jalapeño peper toe!"
+}
+```
+
+The four ingredient sections come from Picnic's own categorisation:
+
+- **`ingredients`** — the core shopping list (Picnic's "Ingrediënten")
+- **`likely_in_stock`** — items Picnic guesses you already have ("Waarschijnlijk nog in huis")
+- **`pantry`** — staples like salt, pepper, oil ("Uit eigen keuken")
+- **`complementary`** — suggested additions ("Combineer met")
+
+`price` is in cents. `selling_unit_id` is usable directly with `picnic_add_to_cart` or `picnic_add_product_to_recipe`.
 
 #### `picnic_save_recipe`
 

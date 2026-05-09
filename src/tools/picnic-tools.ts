@@ -876,21 +876,414 @@ toolRegistry.register({
 })
 
 // Get recipe details tool
+//
+// `client.recipe.getRecipeDetailsPage()` in picnic-api targets the
+// `recipe-details-page-root` page id, which Picnic has retired and now
+// returns "page-template not found". The live page is served at
+// `selling-group-details-page?selling_group_id=<recipe_id>`, so we go
+// directly through `client.app.getPage()` instead.
+//
+// The response is a 1.7MB Fusion page; the projection below pulls out
+// the four ingredient sections (CORE / CORE_STOCKABLE / CUPBOARD /
+// COMPLEMENTARY), cooking steps, the variation tip, and recipe metadata.
+// Pass `full: true` to bypass the projection and get the raw FusionPage.
+
+interface RecipeIngredient {
+  selling_unit_id?: string
+  ingredient_id?: string
+  name?: string
+  brand?: string
+  /** Display price in cents (e.g. 399 for €3.99). */
+  price?: number
+  unit_quantity?: string
+  /** How much of the product the recipe needs, e.g. "75 g". */
+  needed?: string
+  /** Default per-portion count Picnic ships with the recipe. */
+  quantity?: number
+  /** Whether Picnic pre-checks this item — pantry items are typically false. */
+  checked?: boolean
+}
+
+interface RecipeDetails {
+  recipe_id: string
+  name?: string
+  tagline?: string
+  description?: string
+  cooking_time?: string
+  portions?: number
+  image_id?: string
+  /** Items in the "Ingrediënten" tab — the core shopping list. */
+  ingredients: RecipeIngredient[]
+  /** Items under "Waarschijnlijk nog in huis" — likely already in your pantry. */
+  likely_in_stock: RecipeIngredient[]
+  /** Items under "Uit eigen keuken" — pantry staples (salt, pepper, oil). */
+  pantry: RecipeIngredient[]
+  /** Items under "Combineer met" — suggested complementary products. */
+  complementary: RecipeIngredient[]
+  /** Numbered cooking steps in order. */
+  steps: string[]
+  /** The variation tip from the "Tip" section, if present. */
+  tip?: string
+}
+
+/** Picnic uses `#(#hexcolor)text#(#hexcolor)` markers around colored text. */
+function stripMd(s: string): string {
+  return s
+    .replace(/#\(#[0-9a-fA-F]{3,8}\)/g, "")
+    .replace(/\*\*/g, "")
+    .trim()
+}
+
+/**
+ * Walk the tree and find the first node with the given `id`. Picnic uses
+ * stable ids on both BLOCK and PML nodes (e.g. `sellable-components-CORE-list`
+ * is a BLOCK, while `instructions-section` is a PML inside `instructions-block`),
+ * so we don't constrain on `type`.
+ */
+function findNodeById(node: unknown, id: string): unknown {
+  if (!node || typeof node !== "object") return null
+  const obj = node as Record<string, unknown>
+  if (obj.id === id) return obj
+  for (const v of Object.values(obj)) {
+    if (Array.isArray(v)) {
+      for (const c of v) {
+        const r = findNodeById(c, id)
+        if (r) return r
+      }
+    } else if (v && typeof v === "object") {
+      const r = findNodeById(v, id)
+      if (r) return r
+    }
+  }
+  return null
+}
+
+/** Walk the tree and collect every `selling_units` array we encounter. */
+function collectSellingUnitsArrays(node: unknown): Array<Record<string, unknown>[]> {
+  const out: Array<Record<string, unknown>[]> = []
+  const visit = (n: unknown): void => {
+    if (!n || typeof n !== "object") return
+    const obj = n as Record<string, unknown>
+    if (Array.isArray(obj.selling_units) && obj.selling_units.length > 0) {
+      out.push(obj.selling_units as Record<string, unknown>[])
+    }
+    for (const v of Object.values(obj)) {
+      if (Array.isArray(v)) v.forEach(visit)
+      else if (v && typeof v === "object") visit(v)
+    }
+  }
+  visit(node)
+  return out
+}
+
+/**
+ * Build a lookup table mapping `ingredient_id` to the structured
+ * `selling_units` entry, deduping across the multiple containers Picnic
+ * embeds in the page tree.
+ */
+function buildIngredientLookup(page: unknown): Map<string, Record<string, unknown>> {
+  const lookup = new Map<string, Record<string, unknown>>()
+  for (const arr of collectSellingUnitsArrays(page)) {
+    for (const entry of arr) {
+      const id = entry.ingredient_id
+      if (typeof id === "string" && !lookup.has(id)) {
+        lookup.set(id, entry)
+      }
+    }
+  }
+  return lookup
+}
+
+/**
+ * Extract the recipe metadata container — the only `selling_units`-bearing
+ * object that also carries `recipe_name` and `portions`. Picnic embeds
+ * several copies; we take the first.
+ */
+function findRecipeMetaContainer(page: unknown): Record<string, unknown> | null {
+  let result: Record<string, unknown> | null = null
+  const visit = (n: unknown): void => {
+    if (result || !n || typeof n !== "object") return
+    const obj = n as Record<string, unknown>
+    if (
+      Array.isArray(obj.selling_units) &&
+      typeof obj.recipe_name === "string" &&
+      typeof obj.portions === "number"
+    ) {
+      result = obj
+      return
+    }
+    for (const v of Object.values(obj)) {
+      if (Array.isArray(v)) v.forEach(visit)
+      else if (v && typeof v === "object") visit(v)
+    }
+  }
+  visit(page)
+  return result
+}
+
+/**
+ * Extract the per-tile ingredient summary from a leaf list block (e.g.
+ * `sellable-components-CORE-list`). Each direct child is a PML "tile"
+ * whose id encodes the `ingredient_id` and whose RICH_TEXT descendants
+ * carry name, brand, price, unit_quantity, and the "(N g nodig)" needed
+ * label.
+ */
+function extractIngredientsFromList(
+  listBlock: unknown,
+  lookup: Map<string, Record<string, unknown>>,
+): RecipeIngredient[] {
+  if (!listBlock || typeof listBlock !== "object") return []
+  const block = listBlock as Record<string, unknown>
+  const children = Array.isArray(block.children) ? block.children : []
+  const items: RecipeIngredient[] = []
+
+  for (const child of children) {
+    if (!child || typeof child !== "object") continue
+    const tile = child as Record<string, unknown>
+    const tileId = typeof tile.id === "string" ? tile.id : ""
+    const ingredientMatch = tileId.match(/core-wide-selling-unit-tile-(.+)$/)
+    const ingredientId = ingredientMatch ? ingredientMatch[1] : undefined
+
+    const texts: string[] = []
+    const gather = (n: unknown): void => {
+      if (!n || typeof n !== "object") return
+      const m = n as Record<string, unknown>
+      if (m.type === "RICH_TEXT" && typeof m.markdown === "string") {
+        texts.push(stripMd(m.markdown))
+      }
+      for (const v of Object.values(m)) {
+        if (Array.isArray(v)) v.forEach(gather)
+        else if (v && typeof v === "object") gather(v)
+      }
+    }
+    gather(child)
+
+    // Filter out chevrons and empty strings; the order Picnic uses is
+    // [name, brand?, price, unit_quantity, "(N <unit> nodig)"?, promo?].
+    const cleaned = texts.filter((t) => t && t !== ">")
+    const needed = cleaned
+      .map((t) => t.match(/^\(([^)]+)\s*nodig\)$/i)?.[1]?.trim())
+      .find((t): t is string => Boolean(t))
+    const priceStr = cleaned.find((t) => /^\d+\.\d{2}$/.test(t))
+    const priceCents = priceStr ? Math.round(parseFloat(priceStr) * 100) : undefined
+    const unitQuantity = cleaned.find((t) => /^\d+(\.\d+)?\s*(g|gram|ml|l|kg|stuk|stuks)\b/i.test(t))
+
+    // Name is the first non-special text. Brand (if present) is the next
+    // non-numeric, non-promo, non-needed text after the name.
+    const specials = new Set<string>(
+      [needed, priceStr, unitQuantity, "Voeg ingrediënt toe"].filter(
+        (s): s is string => Boolean(s),
+      ),
+    )
+    const promoRe = /^\d+\s+voor\s+€/i
+    const looksLikeNumberOrPromo = (t: string) =>
+      promoRe.test(t) || /^\(.*nodig\)$/i.test(t) || /^\d/.test(t)
+    const nonSpecial = cleaned.filter((t) => !specials.has(t) && !looksLikeNumberOrPromo(t))
+    const name = nonSpecial[0]
+    const brand = nonSpecial[1]
+
+    const lookupEntry = ingredientId ? lookup.get(ingredientId) : undefined
+    const sellingUnitId =
+      typeof lookupEntry?.selling_unit_id === "string" ? lookupEntry.selling_unit_id : undefined
+    const quantity = typeof lookupEntry?.quantity === "number" ? lookupEntry.quantity : undefined
+    const checked = typeof lookupEntry?.checked === "boolean" ? lookupEntry.checked : undefined
+
+    const item: RecipeIngredient = {}
+    if (sellingUnitId) item.selling_unit_id = sellingUnitId
+    if (ingredientId) item.ingredient_id = ingredientId
+    if (name) item.name = name
+    if (brand) item.brand = brand
+    if (priceCents !== undefined) item.price = priceCents
+    if (unitQuantity) item.unit_quantity = unitQuantity
+    if (needed) item.needed = needed
+    if (quantity !== undefined) item.quantity = quantity
+    if (checked !== undefined) item.checked = checked
+
+    if (item.name || item.selling_unit_id) items.push(item)
+  }
+
+  return items
+}
+
+/**
+ * Parse the `instructions-section` block, which contains an alternating
+ * sequence of `Stap N` headers / step text, optionally followed by a
+ * `Tip` header / tip text.
+ */
+function extractStepsAndTip(page: unknown): { steps: string[]; tip?: string } {
+  const block = findNodeById(page, "instructions-section")
+  if (!block) return { steps: [] }
+
+  const texts: string[] = []
+  const gather = (n: unknown): void => {
+    if (!n || typeof n !== "object") return
+    const m = n as Record<string, unknown>
+    if (m.type === "RICH_TEXT" && typeof m.markdown === "string") {
+      texts.push(stripMd(m.markdown))
+    }
+    for (const v of Object.values(m)) {
+      if (Array.isArray(v)) v.forEach(gather)
+      else if (v && typeof v === "object") gather(v)
+    }
+  }
+  gather(block)
+
+  const steps: string[] = []
+  let tip: string | undefined
+  for (let i = 0; i < texts.length; i++) {
+    if (/^Stap\s+\d+$/i.test(texts[i]) && texts[i + 1]) {
+      steps.push(texts[i + 1])
+      i += 1
+    } else if (/^Tip$/i.test(texts[i]) && texts[i + 1]) {
+      tip = texts[i + 1]
+      i += 1
+    }
+  }
+  return { steps, tip }
+}
+
+/**
+ * Project a `selling-group-details-page` Fusion response into a clean
+ * recipe summary. Designed to be resilient to missing sections — any
+ * sub-extractor returning empty just yields an empty array / undefined.
+ */
+function extractRecipeDetails(page: unknown, recipeId: string): RecipeDetails {
+  const meta = findRecipeMetaContainer(page)
+  const headerBlock = findNodeById(page, "sellable-header-container")
+  const imageBlock = findNodeById(page, "selling-group-details-image-wrapper")
+
+  // Header texts come in [tagline, name, description] order.
+  const headerTexts: string[] = []
+  const gatherText = (n: unknown): void => {
+    if (!n || typeof n !== "object") return
+    const m = n as Record<string, unknown>
+    if (m.type === "RICH_TEXT" && typeof m.markdown === "string") {
+      headerTexts.push(stripMd(m.markdown))
+    }
+    for (const v of Object.values(m)) {
+      if (Array.isArray(v)) v.forEach(gatherText)
+      else if (v && typeof v === "object") gatherText(v)
+    }
+  }
+  gatherText(headerBlock)
+
+  // Image block — first IMAGE node carries the recipe hero.
+  let imageId: string | undefined
+  const gatherImage = (n: unknown): void => {
+    if (imageId || !n || typeof n !== "object") return
+    const m = n as Record<string, unknown>
+    if (m.type === "IMAGE") {
+      const src = m.source as { id?: string } | undefined
+      if (src?.id) {
+        imageId = src.id
+        return
+      }
+    }
+    for (const v of Object.values(m)) {
+      if (Array.isArray(v)) v.forEach(gatherImage)
+      else if (v && typeof v === "object") gatherImage(v)
+    }
+  }
+  gatherImage(imageBlock)
+
+  // Cooking time: first RICH_TEXT in the page that matches `<digits> min[uten]`.
+  let cookingTime: string | undefined
+  const visitForTime = (n: unknown): void => {
+    if (cookingTime || !n || typeof n !== "object") return
+    const m = n as Record<string, unknown>
+    if (m.type === "RICH_TEXT" && typeof m.markdown === "string") {
+      const t = stripMd(m.markdown)
+      if (/^\d+\s*min(uten)?$/i.test(t)) {
+        cookingTime = t
+        return
+      }
+    }
+    for (const v of Object.values(m)) {
+      if (Array.isArray(v)) v.forEach(visitForTime)
+      else if (v && typeof v === "object") visitForTime(v)
+    }
+  }
+  visitForTime(page)
+
+  const lookup = buildIngredientLookup(page)
+  const ingredients = extractIngredientsFromList(
+    findNodeById(page, "sellable-components-CORE-list"),
+    lookup,
+  )
+  const likelyInStock = extractIngredientsFromList(
+    findNodeById(page, "sellable-components-CORE_STOCKABLE-list"),
+    lookup,
+  )
+  const pantry = extractIngredientsFromList(
+    findNodeById(page, "sellable-components-CUPBOARD-list"),
+    lookup,
+  )
+  const complementary = extractIngredientsFromList(
+    findNodeById(page, "sellable-components-COMPLEMENTARY-list"),
+    lookup,
+  )
+  const { steps, tip } = extractStepsAndTip(page)
+
+  const result: RecipeDetails = {
+    recipe_id: recipeId,
+    ingredients,
+    likely_in_stock: likelyInStock,
+    pantry,
+    complementary,
+    steps,
+  }
+  if (meta && typeof meta.recipe_name === "string") result.name = meta.recipe_name
+  else if (headerTexts[1]) result.name = headerTexts[1]
+  if (headerTexts[0] && headerTexts[0] !== result.name) result.tagline = headerTexts[0]
+  if (headerTexts[2] && headerTexts[2] !== result.tagline) result.description = headerTexts[2]
+  if (cookingTime) result.cooking_time = cookingTime
+  if (meta && typeof meta.portions === "number") result.portions = meta.portions
+  if (imageId) result.image_id = imageId
+  if (tip) result.tip = tip
+  return result
+}
+
 const recipeDetailsInputSchema = z.object({
   recipeId: z.string().describe("The ID of the recipe to get details for"),
+  full: z
+    .boolean()
+    .default(false)
+    .describe(
+      "When false (default), returns a filtered projection with ingredients, " +
+        "pantry items, cooking steps, and the variation tip. When true, returns " +
+        "the raw FusionPage (~1.7MB).",
+    ),
 })
 
 toolRegistry.register({
   name: "picnic_get_recipe_details",
   description:
-    "Get the detail page for a single recipe by ID. Returns a Fusion page " +
-    "containing ingredients, cooking steps, servings, cooking time, and pricing.",
+    "Get the detail page for a single Picnic recipe by ID. Returns the recipe " +
+    "name, cooking time, default portions, image, and four ingredient sections " +
+    "(core ingredients, items likely already in stock, pantry staples 'uit eigen " +
+    "keuken', and complementary suggestions), plus the numbered cooking steps " +
+    "and the variation tip if present. Each ingredient includes its " +
+    "selling_unit_id (usable with cart tools), name, brand, price (cents), " +
+    "unit_quantity, and the amount needed for the recipe. Set `full: true` to " +
+    "get the raw 1.7MB FusionPage instead.",
   inputSchema: recipeDetailsInputSchema,
   handler: async (args) => {
     await ensureClientInitialized()
     const client = getPicnicClient()
-    const page = await client.recipe.getRecipeDetailsPage(args.recipeId)
-    return page
+
+    // Fetch the live page directly: picnic-api's `recipe.getRecipeDetailsPage`
+    // hardcodes a retired page-template id and 404s. The actual live page is
+    // served as `selling-group-details-page` keyed by `selling_group_id`,
+    // which is the same identifier as the recipe id.
+    const page = await client.app.getPage(
+      `selling-group-details-page?selling_group_id=${encodeURIComponent(args.recipeId)}`,
+    )
+
+    if (args.full) {
+      return page
+    }
+
+    return extractRecipeDetails(page, args.recipeId)
   },
 })
 

@@ -319,19 +319,367 @@ describe("picnic_get_recipes", () => {
 
 describe("picnic_get_recipe_details", () => {
   beforeEach(() => {
-    mockClient.recipe.getRecipeDetailsPage.mockReset()
+    mockClient.app.getPage.mockReset()
   })
 
-  it("delegates to recipe.getRecipeDetailsPage and returns it raw", async () => {
-    const page = { id: "recipe-details-page-root", body: {} }
-    mockClient.recipe.getRecipeDetailsPage.mockResolvedValueOnce(page)
+  /**
+   * Build a minimal `selling-group-details-page` fixture matching the
+   * structural anchors the extractor relies on: a metadata container with
+   * `selling_units`, header & image blocks, four ingredient list blocks
+   * keyed by category, and an instructions PML node with steps + tip.
+   */
+  function recipeDetailsFixture(opts: {
+    recipeId?: string
+    name?: string
+    tagline?: string
+    description?: string
+    cookingTime?: string
+    portions?: number
+    imageId?: string
+    ingredients?: Array<{
+      ingredient_id: string
+      selling_unit_id: string
+      name: string
+      brand?: string
+      price?: string
+      unit_quantity?: string
+      needed?: string
+      quantity?: number
+      checked?: boolean
+    }>
+    pantry?: Array<{ ingredient_id: string; selling_unit_id: string; name: string; brand?: string }>
+    likelyInStock?: Array<{ ingredient_id: string; selling_unit_id: string; name: string }>
+    complementary?: Array<{ ingredient_id: string; selling_unit_id: string; name: string }>
+    steps?: string[]
+    tip?: string
+  }) {
+    const recipeId = opts.recipeId ?? "rec-1"
+    const allIngredients = [
+      ...(opts.ingredients ?? []),
+      ...(opts.likelyInStock ?? []),
+      ...(opts.pantry ?? []),
+      ...(opts.complementary ?? []),
+    ]
 
-    const result = await toolRegistry.executeTool("picnic_get_recipe_details", {
-      recipeId: "abc",
+    const tile = (i: {
+      ingredient_id: string
+      name: string
+      brand?: string
+      price?: string
+      unit_quantity?: string
+      needed?: string
+    }) => ({
+      type: "PML",
+      id: `core-wide-selling-unit-tile-${i.ingredient_id}`,
+      pml: {
+        component: {
+          type: "STACK",
+          children: [
+            { type: "RICH_TEXT", markdown: i.name },
+            { type: "RICH_TEXT", markdown: ">" },
+            ...(i.brand ? [{ type: "RICH_TEXT", markdown: i.brand }] : []),
+            ...(i.price ? [{ type: "RICH_TEXT", markdown: i.price }] : []),
+            ...(i.unit_quantity ? [{ type: "RICH_TEXT", markdown: i.unit_quantity }] : []),
+            ...(i.needed ? [{ type: "RICH_TEXT", markdown: `(${i.needed} nodig)` }] : []),
+          ],
+        },
+      },
     })
 
-    expect(mockClient.recipe.getRecipeDetailsPage).toHaveBeenCalledWith("abc")
-    expect(JSON.parse(result.content[0].text!)).toEqual(page)
+    const listBlock = (id: string, items: typeof opts.ingredients) => ({
+      type: "BLOCK",
+      id,
+      layout: { type: "FLOW", axis: "vertical" },
+      size: {},
+      children: (items ?? []).map(tile),
+    })
+
+    const stepsTexts: Array<{ type: string; markdown: string }> = []
+    for (let i = 0; i < (opts.steps ?? []).length; i++) {
+      stepsTexts.push({ type: "RICH_TEXT", markdown: `Stap ${i + 1}` })
+      stepsTexts.push({ type: "RICH_TEXT", markdown: opts.steps![i] })
+    }
+    if (opts.tip) {
+      stepsTexts.push({ type: "RICH_TEXT", markdown: "Tip" })
+      stepsTexts.push({ type: "RICH_TEXT", markdown: opts.tip })
+    }
+
+    return {
+      id: "selling-group-details-page",
+      presentation: { type: "FULL_SCREEN", style: { backgroundColor: "#fff" } },
+      header: null,
+      body: {
+        type: "STATE_BOUNDARY",
+        id: "GlobalState",
+        state: {},
+        child: {
+          type: "BLOCK",
+          id: "selling-group-details-root",
+          layout: { type: "FLOW", axis: "vertical" },
+          size: {},
+          children: [
+            // Metadata container — what findRecipeMetaContainer matches.
+            {
+              type: "DATA",
+              recipe_id: recipeId,
+              recipe_name: opts.name,
+              portions: opts.portions ?? 1,
+              image_type: "CUSTOM",
+              selling_units: allIngredients.map((i) => ({
+                checked: i.checked ?? false,
+                ingredient_id: i.ingredient_id,
+                quantity: i.quantity ?? 1,
+                selling_unit_id: i.selling_unit_id,
+                status: "ACTIVE",
+                swap_type: null,
+              })),
+            },
+            // Header block: tagline, name, description.
+            {
+              type: "BLOCK",
+              id: "sellable-header-container",
+              layout: {},
+              size: {},
+              children: [
+                ...(opts.tagline
+                  ? [{ type: "RICH_TEXT", markdown: opts.tagline }]
+                  : []),
+                ...(opts.name ? [{ type: "RICH_TEXT", markdown: opts.name }] : []),
+                ...(opts.description
+                  ? [{ type: "RICH_TEXT", markdown: opts.description }]
+                  : []),
+              ],
+            },
+            // Image block.
+            {
+              type: "BLOCK",
+              id: "selling-group-details-image-wrapper",
+              layout: {},
+              size: {},
+              children: opts.imageId
+                ? [{ type: "IMAGE", source: { id: opts.imageId }, width: 100, height: 100 }]
+                : [],
+            },
+            // Cooking time floats free in the page; put it in a sibling block.
+            ...(opts.cookingTime
+              ? [
+                  {
+                    type: "BLOCK",
+                    id: "selling-group-content",
+                    layout: {},
+                    size: {},
+                    children: [{ type: "RICH_TEXT", markdown: opts.cookingTime }],
+                  },
+                ]
+              : []),
+            listBlock("sellable-components-CORE-list", opts.ingredients),
+            listBlock("sellable-components-CORE_STOCKABLE-list", opts.likelyInStock),
+            listBlock("sellable-components-CUPBOARD-list", opts.pantry),
+            listBlock("sellable-components-COMPLEMENTARY-list", opts.complementary),
+            // Instructions — instructions-section is a PML, not a BLOCK.
+            {
+              type: "BLOCK",
+              id: "instructions-block",
+              layout: {},
+              size: {},
+              children: [
+                {
+                  type: "PML",
+                  id: "instructions-section",
+                  pml: {
+                    component: {
+                      type: "STACK",
+                      children: stepsTexts,
+                    },
+                  },
+                },
+              ],
+            },
+          ],
+        },
+      },
+    }
+  }
+
+  it("extracts the full kip-kormaballetjes-style projection", async () => {
+    mockClient.app.getPage.mockResolvedValueOnce(
+      recipeDetailsFixture({
+        recipeId: "rec-1",
+        name: "Kip-kormaballetjes met mangosalsa",
+        tagline: "Tropische verrassing",
+        description: "Zoet en hartig in één gerecht.",
+        cookingTime: "20 min",
+        portions: 1,
+        imageId: "recipes/abc",
+        ingredients: [
+          {
+            ingredient_id: "ing-1",
+            selling_unit_id: "s1015074",
+            name: "Kipgehakt",
+            brand: "'t Slagershuys",
+            price: "3.99",
+            unit_quantity: "300 gram",
+            needed: "75 g",
+            checked: true,
+          },
+          {
+            ingredient_id: "ing-2",
+            selling_unit_id: "s1002492",
+            name: "Kormasaus",
+            brand: "Patak's",
+            price: "3.79",
+            unit_quantity: "450 gram",
+            needed: "0.25 potten",
+            checked: true,
+          },
+        ],
+        likelyInStock: [
+          {
+            ingredient_id: "ing-3",
+            selling_unit_id: "s1015456",
+            name: "Bio knoflook",
+          },
+        ],
+        pantry: [
+          {
+            ingredient_id: "ing-4",
+            selling_unit_id: "s1006367",
+            name: "Zeezout",
+            brand: "Verstegen",
+          },
+        ],
+        complementary: [
+          {
+            ingredient_id: "ing-5",
+            selling_unit_id: "s1015360",
+            name: "Jalapeno groene pepers",
+          },
+        ],
+        steps: [
+          "Bereid de rijst.",
+          "Maak de gehaktballetjes.",
+          "Snijd de paprika.",
+        ],
+        tip: "Hou je van pittig? Voeg jalapeño toe.",
+      }),
+    )
+
+    const result = await toolRegistry.executeTool("picnic_get_recipe_details", {
+      recipeId: "rec-1",
+    })
+    const payload = JSON.parse(result.content[0].text!)
+
+    expect(mockClient.app.getPage).toHaveBeenCalledWith(
+      "selling-group-details-page?selling_group_id=rec-1",
+    )
+    expect(payload.recipe_id).toBe("rec-1")
+    expect(payload.name).toBe("Kip-kormaballetjes met mangosalsa")
+    expect(payload.tagline).toBe("Tropische verrassing")
+    expect(payload.description).toBe("Zoet en hartig in één gerecht.")
+    expect(payload.cooking_time).toBe("20 min")
+    expect(payload.portions).toBe(1)
+    expect(payload.image_id).toBe("recipes/abc")
+
+    expect(payload.ingredients).toHaveLength(2)
+    expect(payload.ingredients[0]).toMatchObject({
+      selling_unit_id: "s1015074",
+      ingredient_id: "ing-1",
+      name: "Kipgehakt",
+      brand: "'t Slagershuys",
+      price: 399,
+      unit_quantity: "300 gram",
+      needed: "75 g",
+      quantity: 1,
+      checked: true,
+    })
+
+    expect(payload.likely_in_stock).toHaveLength(1)
+    expect(payload.likely_in_stock[0].name).toBe("Bio knoflook")
+
+    expect(payload.pantry).toHaveLength(1)
+    expect(payload.pantry[0].name).toBe("Zeezout")
+    expect(payload.pantry[0].brand).toBe("Verstegen")
+
+    expect(payload.complementary).toHaveLength(1)
+    expect(payload.complementary[0].name).toBe("Jalapeno groene pepers")
+
+    expect(payload.steps).toEqual([
+      "Bereid de rijst.",
+      "Maak de gehaktballetjes.",
+      "Snijd de paprika.",
+    ])
+    expect(payload.tip).toBe("Hou je van pittig? Voeg jalapeño toe.")
+  })
+
+  it("URL-encodes the recipe id when fetching", async () => {
+    mockClient.app.getPage.mockResolvedValueOnce(recipeDetailsFixture({ recipeId: "weird/id" }))
+
+    await toolRegistry.executeTool("picnic_get_recipe_details", { recipeId: "weird/id" })
+
+    expect(mockClient.app.getPage).toHaveBeenCalledWith(
+      "selling-group-details-page?selling_group_id=weird%2Fid",
+    )
+  })
+
+  it("strips Picnic's color markers and bold markdown from text fields", async () => {
+    // Picnic wraps colored text as `#(#hexcolor)text#(#hexcolor)` and uses
+    // `**bold**` for emphasis; both must be stripped from extracted strings.
+    mockClient.app.getPage.mockResolvedValueOnce(
+      recipeDetailsFixture({
+        recipeId: "rec-2",
+        name: "Recipe",
+        cookingTime: "#(#333333)20 min#(#333333)",
+        ingredients: [
+          {
+            ingredient_id: "i1",
+            selling_unit_id: "s1",
+            name: "**Bio** sjalotten",
+            price: "1.39",
+            unit_quantity: "250 gram",
+          },
+        ],
+      }),
+    )
+
+    const result = await toolRegistry.executeTool("picnic_get_recipe_details", {
+      recipeId: "rec-2",
+    })
+    const payload = JSON.parse(result.content[0].text!)
+
+    expect(payload.cooking_time).toBe("20 min")
+    expect(payload.ingredients[0].name).toBe("Bio sjalotten")
+  })
+
+  it("returns the raw FusionPage when full=true", async () => {
+    const fixture = recipeDetailsFixture({ recipeId: "rec-3", name: "X" })
+    mockClient.app.getPage.mockResolvedValueOnce(fixture)
+
+    const result = await toolRegistry.executeTool("picnic_get_recipe_details", {
+      recipeId: "rec-3",
+      full: true,
+    })
+    const payload = JSON.parse(result.content[0].text!)
+
+    expect(payload.id).toBe("selling-group-details-page")
+    expect(payload.body).toBeDefined()
+    expect(payload.ingredients).toBeUndefined()
+  })
+
+  it("returns empty arrays when sections are missing", async () => {
+    // No ingredients/steps at all — extractor should not throw.
+    mockClient.app.getPage.mockResolvedValueOnce(recipeDetailsFixture({ recipeId: "rec-4" }))
+
+    const result = await toolRegistry.executeTool("picnic_get_recipe_details", {
+      recipeId: "rec-4",
+    })
+    const payload = JSON.parse(result.content[0].text!)
+
+    expect(payload.ingredients).toEqual([])
+    expect(payload.likely_in_stock).toEqual([])
+    expect(payload.pantry).toEqual([])
+    expect(payload.complementary).toEqual([])
+    expect(payload.steps).toEqual([])
+    expect(payload.tip).toBeUndefined()
   })
 })
 
