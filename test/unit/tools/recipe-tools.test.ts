@@ -6,11 +6,8 @@ import { describe, it, expect, vi, beforeEach } from "vitest"
 const mockClient = {
   app: { getPage: vi.fn() },
   recipe: {
-    getRecipeDetailsPage: vi.fn(),
     saveRecipe: vi.fn(),
     unsaveRecipe: vi.fn(),
-    addProductToRecipe: vi.fn(),
-    removeProductFromRecipe: vi.fn(),
   },
 }
 
@@ -650,6 +647,95 @@ describe("picnic_get_recipe_details", () => {
     expect(payload.ingredients[0].name).toBe("Bio sjalotten")
   })
 
+  it("parses prices in DE-locale (comma decimal)", async () => {
+    // Picnic uses '.' for decimals in NL but ',' in DE — both should
+    // resolve to the same cent value.
+    mockClient.app.getPage.mockResolvedValueOnce(
+      recipeDetailsFixture({
+        recipeId: "rec-de",
+        name: "Recipe",
+        ingredients: [
+          {
+            ingredient_id: "i1",
+            selling_unit_id: "s1",
+            name: "Mehl",
+            price: "1,39",
+            unit_quantity: "1 kg",
+          },
+        ],
+      }),
+    )
+
+    const result = await toolRegistry.executeTool("picnic_get_recipe_details", {
+      recipeId: "rec-de",
+    })
+    const payload = JSON.parse(result.content[0].text!)
+    expect(payload.ingredients[0].price).toBe(139)
+  })
+
+  it("does not bleed trailing prose into the brand field", async () => {
+    // Picnic occasionally embeds an allergen / promo sentence after the
+    // brand. The brand slot should stay empty (or hold a real short label),
+    // not capture an entire sentence.
+    const fixture = recipeDetailsFixture({
+      recipeId: "rec-noisy",
+      name: "Recipe",
+      ingredients: [
+        {
+          ingredient_id: "i1",
+          selling_unit_id: "s1",
+          name: "Komkommer",
+          price: "0.85",
+          unit_quantity: "1 stuk",
+        },
+      ],
+    })
+    // Inject a long sentence into the tile, right after the name. We locate
+    // the tile by id rather than by index so the test is robust to fixture
+    // re-ordering.
+    type Tile = {
+      id?: string
+      pml?: { component?: { children?: Array<{ type: string; markdown: string }> } }
+    }
+    const findTile = (n: unknown): Tile | null => {
+      if (!n || typeof n !== "object") return null
+      const obj = n as Tile & Record<string, unknown>
+      if (obj.id === "core-wide-selling-unit-tile-i1") return obj
+      for (const v of Object.values(obj)) {
+        if (Array.isArray(v)) {
+          for (const c of v) {
+            const r = findTile(c)
+            if (r) return r
+          }
+        } else if (v && typeof v === "object") {
+          const r = findTile(v)
+          if (r) return r
+        }
+      }
+      return null
+    }
+    const tile = findTile(fixture)
+    tile!.pml!.component!.children!.splice(1, 0, {
+      type: "RICH_TEXT",
+      markdown: "Bevat geen allergenen. Geschikt voor vegetariërs!",
+    })
+    mockClient.app.getPage.mockResolvedValueOnce(fixture)
+
+    const result = await toolRegistry.executeTool("picnic_get_recipe_details", {
+      recipeId: "rec-noisy",
+    })
+    const payload = JSON.parse(result.content[0].text!)
+    expect(payload.ingredients[0].name).toBe("Komkommer")
+    expect(payload.ingredients[0].brand).toBeUndefined()
+  })
+
+  it("rejects an empty recipeId", async () => {
+    await expect(
+      toolRegistry.executeTool("picnic_get_recipe_details", { recipeId: "" }),
+    ).rejects.toThrow(/Invalid input/)
+    expect(mockClient.app.getPage).not.toHaveBeenCalled()
+  })
+
   it("returns the raw FusionPage when full=true", async () => {
     const fixture = recipeDetailsFixture({ recipeId: "rec-3", name: "X" })
     mockClient.app.getPage.mockResolvedValueOnce(fixture)
@@ -718,66 +804,3 @@ describe("picnic_save_recipe / picnic_unsave_recipe", () => {
   })
 })
 
-describe("picnic_add_product_to_recipe / picnic_remove_product_from_recipe", () => {
-  beforeEach(() => {
-    mockClient.recipe.addProductToRecipe.mockReset()
-    mockClient.recipe.removeProductFromRecipe.mockReset()
-  })
-
-  const fakeCart = {
-    type: "ORDER",
-    id: "cart1",
-    items: [],
-    total_count: 0,
-    total_price: 0,
-    checkout_total_price: 0,
-    total_savings: 0,
-  }
-
-  it("adds a product with optional sectionId and count defaults", async () => {
-    mockClient.recipe.addProductToRecipe.mockResolvedValueOnce(fakeCart)
-
-    const result = await toolRegistry.executeTool("picnic_add_product_to_recipe", {
-      productId: "p1",
-      recipeId: "r1",
-    })
-
-    expect(mockClient.recipe.addProductToRecipe).toHaveBeenCalledWith("p1", "r1", undefined, 1)
-    const payload = JSON.parse(result.content[0].text!)
-    expect(payload.message).toBe("Added 1 item(s) to cart from recipe")
-    expect(payload.recipeId).toBe("r1")
-    expect(payload.cart).toBeDefined()
-  })
-
-  it("forwards sectionId and count when provided", async () => {
-    mockClient.recipe.addProductToRecipe.mockResolvedValueOnce(fakeCart)
-
-    await toolRegistry.executeTool("picnic_add_product_to_recipe", {
-      productId: "p1",
-      recipeId: "r1",
-      sectionId: "section-2",
-      count: 3,
-    })
-
-    expect(mockClient.recipe.addProductToRecipe).toHaveBeenCalledWith("p1", "r1", "section-2", 3)
-  })
-
-  it("removes a product with the same context shape", async () => {
-    mockClient.recipe.removeProductFromRecipe.mockResolvedValueOnce(fakeCart)
-
-    const result = await toolRegistry.executeTool("picnic_remove_product_from_recipe", {
-      productId: "p1",
-      recipeId: "r1",
-      count: 2,
-    })
-
-    expect(mockClient.recipe.removeProductFromRecipe).toHaveBeenCalledWith(
-      "p1",
-      "r1",
-      undefined,
-      2,
-    )
-    const payload = JSON.parse(result.content[0].text!)
-    expect(payload.message).toBe("Removed 2 item(s) from cart in recipe")
-  })
-})

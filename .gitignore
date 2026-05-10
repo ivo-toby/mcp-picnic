@@ -305,3 +305,6 @@ Cntfl-Readme.md
 
 # Picnic session file
 picnic-session.json
+
+# Local developer probes for live API exploration (not part of the build)
+scripts/probe-*

@@ -1064,12 +1064,17 @@ function extractIngredientsFromList(
     const needed = cleaned
       .map((t) => t.match(/^\(([^)]+)\s*nodig\)$/i)?.[1]?.trim())
       .find((t): t is string => Boolean(t))
-    const priceStr = cleaned.find((t) => /^\d+\.\d{2}$/.test(t))
-    const priceCents = priceStr ? Math.round(parseFloat(priceStr) * 100) : undefined
+    // Picnic uses `.` as decimal separator in NL and `,` in DE.
+    const priceStr = cleaned.find((t) => /^\d+[.,]\d{2}$/.test(t))
+    const priceCents = priceStr
+      ? Math.round(parseFloat(priceStr.replace(",", ".")) * 100)
+      : undefined
     const unitQuantity = cleaned.find((t) => /^\d+(\.\d+)?\s*(g|gram|ml|l|kg|stuk|stuks)\b/i.test(t))
 
     // Name is the first non-special text. Brand (if present) is the next
-    // non-numeric, non-promo, non-needed text after the name.
+    // non-numeric, non-promo, non-needed text after the name. Brands on
+    // Picnic are short labels (no full sentences); guard against trailing
+    // prose (e.g. allergen notes) bleeding into the brand slot.
     const specials = new Set<string>(
       [needed, priceStr, unitQuantity, "Voeg ingrediënt toe"].filter(
         (s): s is string => Boolean(s),
@@ -1078,9 +1083,10 @@ function extractIngredientsFromList(
     const promoRe = /^\d+\s+voor\s+€/i
     const looksLikeNumberOrPromo = (t: string) =>
       promoRe.test(t) || /^\(.*nodig\)$/i.test(t) || /^\d/.test(t)
+    const looksLikeBrand = (t: string) => t.length <= 40 && !/[.!?]/.test(t)
     const nonSpecial = cleaned.filter((t) => !specials.has(t) && !looksLikeNumberOrPromo(t))
     const name = nonSpecial[0]
-    const brand = nonSpecial[1]
+    const brand = nonSpecial[1] && looksLikeBrand(nonSpecial[1]) ? nonSpecial[1] : undefined
 
     const lookupEntry = ingredientId ? lookup.get(ingredientId) : undefined
     const sellingUnitId =
@@ -1244,7 +1250,7 @@ function extractRecipeDetails(page: unknown, recipeId: string): RecipeDetails {
 }
 
 const recipeDetailsInputSchema = z.object({
-  recipeId: z.string().describe("The ID of the recipe to get details for"),
+  recipeId: z.string().min(1).describe("The ID of the recipe to get details for"),
   full: z
     .boolean()
     .default(false)
@@ -1327,66 +1333,10 @@ toolRegistry.register({
   },
 })
 
-// Add product to recipe tool
-const addProductToRecipeInputSchema = z.object({
-  productId: z.string().describe("The selling-unit / article ID of the product to add"),
-  recipeId: z.string().describe("The ID of the recipe the product belongs to"),
-  sectionId: z.string().optional().describe("The section within the recipe (optional)"),
-  count: z.number().min(1).default(1).describe("Number of items to add (default: 1)"),
-})
-
-toolRegistry.register({
-  name: "picnic_add_product_to_recipe",
-  description:
-    "Add a product to the shopping cart in the context of a recipe. Includes " +
-    "the recipe context so Picnic's recipe stepper UI and analytics know the " +
-    "addition originated from a recipe.",
-  inputSchema: addProductToRecipeInputSchema,
-  handler: async (args) => {
-    await ensureClientInitialized()
-    const client = getPicnicClient()
-    const cart = await client.recipe.addProductToRecipe(
-      args.productId,
-      args.recipeId,
-      args.sectionId,
-      args.count,
-    )
-    return {
-      message: `Added ${args.count} item(s) to cart from recipe`,
-      recipeId: args.recipeId,
-      cart: filterCartData(cart),
-    }
-  },
-})
-
-// Remove product from recipe tool
-const removeProductFromRecipeInputSchema = z.object({
-  productId: z.string().describe("The selling-unit / article ID of the product to remove"),
-  recipeId: z.string().describe("The ID of the recipe the product belongs to"),
-  sectionId: z.string().optional().describe("The section within the recipe (optional)"),
-  count: z.number().min(1).default(1).describe("Number of items to remove (default: 1)"),
-})
-
-toolRegistry.register({
-  name: "picnic_remove_product_from_recipe",
-  description:
-    "Remove a product from the shopping cart in the context of a recipe. " +
-    "Includes the recipe context for analytics and the recipe stepper UI.",
-  inputSchema: removeProductFromRecipeInputSchema,
-  handler: async (args) => {
-    await ensureClientInitialized()
-    const client = getPicnicClient()
-    const cart = await client.recipe.removeProductFromRecipe(
-      args.productId,
-      args.recipeId,
-      args.sectionId,
-      args.count,
-    )
-    return {
-      message: `Removed ${args.count} item(s) from cart in recipe`,
-      recipeId: args.recipeId,
-      cart: filterCartData(cart),
-    }
-  },
-})
+// Note: recipe-context cart mutations (add/remove product with recipe context)
+// were intentionally left out. The selling_unit_id returned from
+// `picnic_get_recipe_details` is the same id used by `picnic_add_to_cart` and
+// `picnic_remove_from_cart`, so callers can mutate the cart directly without
+// the extra recipe-stepper analytics context that the dedicated endpoints
+// would attach.
 

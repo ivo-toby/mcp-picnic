@@ -286,7 +286,7 @@ The four ingredient sections come from Picnic's own categorisation:
 - **`pantry`** — staples like salt, pepper, oil ("Uit eigen keuken")
 - **`complementary`** — suggested additions ("Combineer met")
 
-`price` is in cents. `selling_unit_id` is usable directly with `picnic_add_to_cart` or `picnic_add_product_to_recipe`.
+`price` is in cents. `selling_unit_id` is usable directly with `picnic_add_to_cart`.
 
 #### `picnic_save_recipe`
 
@@ -303,28 +303,6 @@ Remove a recipe from the user's saved recipes list.
 **Parameters:**
 
 - `recipeId` (string): The ID of the recipe to unsave
-
-#### `picnic_add_product_to_recipe`
-
-Add a product to the shopping cart in the context of a recipe. Includes the recipe context so Picnic's recipe stepper UI and analytics know the addition originated from a recipe.
-
-**Parameters:**
-
-- `productId` (string): The selling-unit / article ID of the product to add
-- `recipeId` (string): The ID of the recipe the product belongs to
-- `sectionId` (string, optional): The section within the recipe
-- `count` (number, optional): Number of items to add (default: 1)
-
-#### `picnic_remove_product_from_recipe`
-
-Remove a product from the shopping cart in the context of a recipe. Includes the recipe context for analytics and the recipe stepper UI.
-
-**Parameters:**
-
-- `productId` (string): The selling-unit / article ID of the product to remove
-- `recipeId` (string): The ID of the recipe the product belongs to
-- `sectionId` (string, optional): The section within the recipe
-- `count` (number, optional): Number of items to remove (default: 1)
 
 ### Other
 
