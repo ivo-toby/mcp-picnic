@@ -123,6 +123,21 @@ AI: Let me check your current deliveries and their status...
 
 Here are some practical scenarios where MCP Picnic can transform your grocery shopping experience:
 
+### 📖 **Recipe Browsing**
+
+**Scenario**: Picking a 20-minute recipe from the Picnic cookbook and inspecting its ingredients
+
+```
+User: "Show me some quick weeknight recipes from Picnic and pick a chicken one"
+
+AI Actions:
+1. Uses picnic_get_recipes (no category) to list cookbook highlights and the 47 available categories
+2. Uses picnic_get_recipes with category="20minuten" to fetch all recipes in the 20-minute category
+3. Picks one with chicken from the title and uses picnic_get_recipe_details for the recipe id
+4. Reads back the ingredients list, the "uit eigen keuken" pantry items, the cooking steps and the variation tip
+5. Optionally uses picnic_save_recipe to save it for later
+```
+
 ### 🍽️ **Smart Meal Planning**
 
 **Scenario**: Planning a week's worth of healthy meals for a family of 4
@@ -523,6 +538,13 @@ The server provides comprehensive access to Picnic's functionality through 25+ s
 - **`picnic_get_wallet_transaction_details`** - Get detailed transaction information
 - **`picnic_get_mgm_details`** - Get MGM (friends discount) program details
 
+### Recipes
+
+- **`picnic_get_recipes`** - Browse the cookbook (~30 highlighted recipes plus 47 categories) or fetch a specific category by id
+- **`picnic_get_recipe_details`** - Structured recipe details: ingredients, "uit eigen keuken" pantry items, suggested complementary products, cooking steps, and the variation tip
+- **`picnic_save_recipe`** - Save a recipe to the user's saved recipes list
+- **`picnic_unsave_recipe`** - Remove a recipe from the user's saved recipes list
+
 ## Development
 
 ### Running in Development Mode
@@ -725,6 +747,21 @@ AI: Je 2FA-code is geverifieerd. Je bent nu volledig geauthenticeerd en kunt beg
 ## Gebruiksscenario's
 
 Hier zijn enkele praktische scenario's waarin MCP Picnic je boodschappen-ervaring kan transformeren:
+
+### 📖 **Recepten Bladeren**
+
+**Scenario**: Een recept van 20 minuten kiezen uit het Picnic-kookboek en de ingrediënten bekijken
+
+```
+Gebruiker: "Laat me snelle doordeweekse recepten zien van Picnic en kies een kiprecept"
+
+AI Acties:
+1. Gebruikt picnic_get_recipes (zonder categorie) om de kookboek-highlights en 47 categorieën op te halen
+2. Gebruikt picnic_get_recipes met category="20minuten" om alle recepten in die categorie te tonen
+3. Kiest er een met kip in de titel en gebruikt picnic_get_recipe_details met het recipe id
+4. Geeft de ingrediëntenlijst, de "uit eigen keuken"-spullen, de bereidingsstappen en de variatietip terug
+5. Slaat het recept eventueel op met picnic_save_recipe
+```
 
 ### 🍽️ **Slimme Maaltijdplanning**
 
@@ -1044,6 +1081,21 @@ KI: Ihr 2FA-Code wurde verifiziert. Sie sind jetzt vollständig authentifiziert 
 ## Anwendungsfälle
 
 Hier sind einige praktische Szenarien, in denen MCP Picnic Ihr Lebensmitteleinkaufserlebnis transformieren kann:
+
+### 📖 **Rezepte Durchstöbern**
+
+**Szenario**: Ein 20-Minuten-Rezept aus dem Picnic-Kochbuch wählen und die Zutaten ansehen
+
+```
+Benutzer: "Zeig mir schnelle Wochentagsrezepte von Picnic und such ein Hähnchengericht aus"
+
+KI-Aktionen:
+1. Verwendet picnic_get_recipes (ohne Kategorie) für die Kochbuch-Highlights und 47 verfügbaren Kategorien
+2. Verwendet picnic_get_recipes mit category="20minuten" für alle Rezepte dieser Kategorie
+3. Wählt ein Rezept mit Hähnchen im Titel und verwendet picnic_get_recipe_details mit der recipe id
+4. Liest Zutatenliste, Vorratsgegenstände ("uit eigen keuken"), Kochschritte und den Variations-Tipp
+5. Speichert das Rezept optional mit picnic_save_recipe
+```
 
 ### 🍽️ **Intelligente Mahlzeitenplanung**
 
