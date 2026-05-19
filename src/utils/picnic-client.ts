@@ -10,7 +10,7 @@ async function loadSession(): Promise<string | null> {
     const data = await fs.readFile(config.PICNIC_SESSION_FILE, "utf-8")
     const session = JSON.parse(data)
     return session.authKey || null
-  } catch (error) {
+  } catch {
     return null
   }
 }
@@ -53,7 +53,7 @@ export async function initializePicnicClient(
       picnicClientInstance = client
       console.error("Successfully reused saved session.")
       return
-    } catch (error) {
+    } catch {
       console.error("Saved session invalid, performing fresh login...")
       client.authKey = null // Clear invalid key before login
     }
@@ -63,7 +63,9 @@ export async function initializePicnicClient(
   picnicClientInstance = client
 
   if (loginResult?.second_factor_authentication_required) {
-    console.error("Picnic client logged in, but 2FA is required. Use the 2FA tools to complete authentication.")
+    console.error(
+      "Picnic client logged in, but 2FA is required. Use the 2FA tools to complete authentication.",
+    )
   } else {
     await saveSession()
     console.error("Picnic client initialized successfully.")

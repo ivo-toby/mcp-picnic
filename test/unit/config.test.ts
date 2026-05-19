@@ -63,6 +63,7 @@ describe("Config Schema - PICNIC_COUNTRY_CODE (Issue #10 regression)", () => {
         configSchema.parse({
           PICNIC_USERNAME: "test-user",
           PICNIC_PASSWORD: "test-pass",
+          // Invalid country code: FR used to be valid before picnic-api 4.3.0.
           PICNIC_COUNTRY_CODE: "FR",
         })
       }).toThrow()

@@ -1,4 +1,5 @@
 import { z } from "zod"
+import { filterCartData, filterProductDetails } from "./picnic-transformers.js"
 import { toolRegistry } from "./registry.js"
 import { getPicnicClient, initializePicnicClient, saveSession } from "../utils/picnic-client.js"
 
@@ -16,68 +17,9 @@ import { getPicnicClient, initializePicnicClient, saveSession } from "../utils/p
 async function ensureClientInitialized() {
   try {
     getPicnicClient()
-  } catch (error) {
+  } catch {
     // Client not initialized, initialize it now
     await initializePicnicClient()
-  }
-}
-
-// Helper function to filter cart data for LLM consumption
-function filterCartData(cart: unknown) {
-  if (!cart || typeof cart !== "object") return cart
-
-  const cartObj = cart as {
-    type?: string
-    id?: string
-      items?: Array<{
-        id?: string
-        display_price?: number
-        price?: number
-        decorators?: Array<{
-          type?: string
-          text?: string
-        }>
-        items?: Array<{
-          id?: string
-          name?: string
-          unit_quantity?: string
-          price?: number
-          price_ranges?: Array<{
-            from_quantity?: number
-            price?: number
-          }>
-          image_ids?: string[]
-          max_count?: number
-        }>
-    }>
-    total_count?: number
-    total_price?: number
-    checkout_total_price?: number
-    total_savings?: number
-  }
-
-  const filteredItems = cartObj.items?.map((orderLine) => ({
-    order_line_id: orderLine.id,
-    price: orderLine.display_price || orderLine.price,
-    ...(orderLine.decorators?.length && { decorators: orderLine.decorators }),
-    articles: orderLine.items?.map((article) => ({
-      product_id: article.id,
-      name: article.name,
-      unit: article.unit_quantity,
-      price: article.price,
-      ...(article.price_ranges?.length && { bundle_prices: article.price_ranges }),
-      ...(article.image_ids?.length && { image_id: article.image_ids[0] }),
-    })),
-  }))
-
-  return {
-    type: cartObj.type,
-    id: cartObj.id,
-    items: filteredItems,
-    total_count: cartObj.total_count,
-    total_price: cartObj.total_price,
-    checkout_total_price: cartObj.checkout_total_price,
-    total_savings: cartObj.total_savings,
   }
 }
 
@@ -188,15 +130,7 @@ toolRegistry.register({
       return details
     }
 
-    return {
-      id: details.id,
-      name: details.name,
-      brand: details.brand,
-      price: details.displayPrice,
-      unit: details.unitQuantity,
-      ...(details.priceRanges?.length && { bundle_prices: details.priceRanges }),
-      ...(details.imageIds.length > 0 && { image_id: details.imageIds[0] }),
-    }
+    return filterProductDetails(details)
   },
 })
 
