@@ -17,6 +17,7 @@ are a different paradigm.
 ## Decision
 
 Remove the corresponding MCP tools:
+
 - `picnic_get_categories`
 - `picnic_get_category_details`
 - `picnic_get_lists`

@@ -1,7 +1,7 @@
 ---
 id: "003"
 title: Keep raw fetch bypass for 2FA verification
-status: accepted
+status: superseded
 date: 2026-03-06
 context: picnic-api-v4-upgrade
 ---
@@ -21,5 +21,10 @@ the upgrade (either upstream fix or local improvement).
 
 ## Rationale
 
-Safe upgrade path — changing the 2FA flow during a dependency upgrade
+Safe upgrade path - changing the 2FA flow during a dependency upgrade
 adds unnecessary risk. The bypass works and is well-documented in code.
+
+## Superseded by
+
+ADR 004 replaces this decision now that upstream 2FA verification persists
+the refreshed auth token correctly.
