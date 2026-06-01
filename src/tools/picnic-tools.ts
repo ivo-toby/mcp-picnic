@@ -614,8 +614,9 @@ toolRegistry.register({
         "User-Agent": "okhttp/3.12.2",
         "Content-Type": "application/json; charset=UTF-8",
         ...(authKey && { "x-picnic-auth": authKey }),
-        "x-picnic-agent": "30100;1.15.232-15154",
-        "x-picnic-did": "3C417201548B2E3B",
+        // Use the client's own device/agent headers so 2FA verification matches the login device.
+        "x-picnic-agent": client.picnicHeaders["x-picnic-agent"],
+        "x-picnic-did": client.picnicHeaders["x-picnic-did"],
       },
       body: JSON.stringify({ otp: args.code }),
     })

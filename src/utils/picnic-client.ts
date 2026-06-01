@@ -1,6 +1,7 @@
 import PicnicClient from "picnic-api"
 import fs from "fs/promises"
 import { config } from "../config.js"
+import { resolveDeviceId } from "./device-id.js"
 
 // Singleton instance for caching
 let picnicClientInstance: InstanceType<typeof PicnicClient> | null = null
@@ -39,11 +40,14 @@ export async function initializePicnicClient(
   const loginCountryCode = countryCode || config.PICNIC_COUNTRY_CODE
 
   const savedAuthKey = await loadSession()
+  const deviceId = await resolveDeviceId()
 
   const client = new PicnicClient({
     countryCode: loginCountryCode,
     apiVersion,
     authKey: savedAuthKey ?? undefined,
+    deviceId,
+    agent: config.PICNIC_AGENT,
   })
 
   if (savedAuthKey) {
