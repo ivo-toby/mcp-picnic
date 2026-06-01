@@ -20,7 +20,7 @@
     "bin"
   ],
   "scripts": {
-    "build": "node build.js && chmod +x bin/mcp-server.js",
+    "build": "node build.js",
     "clean": "rm -rf dist",
     "lint": "eslint src/**/*.ts",
     "lint:fix": "eslint --fix src/**/*.ts",
