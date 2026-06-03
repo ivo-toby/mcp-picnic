@@ -1,6 +1,13 @@
 import { z } from "zod"
 import { toolRegistry } from "./registry.js"
 import { getPicnicClient, initializePicnicClient, saveSession } from "../utils/picnic-client.js"
+import {
+  resolveRecipeId,
+  parseSellingGroupRecipe,
+  parseRecipeList,
+  buildRecipeSourceUrl,
+} from "../utils/recipe-parser.js"
+import { config } from "../config.js"
 
 /**
  * Picnic API tools optimized for LLM consumption
@@ -210,6 +217,237 @@ toolRegistry.register({
       size: args.size,
       image,
     }
+  },
+})
+
+// Recipe tools
+//
+// Picnic recipes are "selling groups". Recipe detail comes from
+// /pages/selling-group-details-page?selling_group_id=<id>, and the cookbook /
+// recipe overview from /pages/cookbook-page-content. These page routes are
+// called directly via sendRequest because the picnic-api recipe.* page methods
+// target outdated ids (recipe-details-page-root) that the API answers with 404.
+
+// Base URL for recipe/product image derivatives, derived from the API URL, e.g.
+// https://storefront-prod.de.picnicinternational.com/static/images
+function recipeImageBaseUrl(client: ReturnType<typeof getPicnicClient>): string {
+  return client.url.replace(/\/api\/.*$/, "/static/images")
+}
+
+async function fetchCookbookRecipes(client: ReturnType<typeof getPicnicClient>) {
+  const page = await client.sendRequest("GET", "/pages/cookbook-page-content", null, true)
+  return parseRecipeList(page, { imageBaseUrl: recipeImageBaseUrl(client) })
+}
+
+function paginateRecipes(all: ReturnType<typeof parseRecipeList>, offset: number, limit: number) {
+  const startIndex = offset || 0
+  const recipes = all.slice(startIndex, startIndex + limit).map((recipe) => ({
+    ...recipe,
+    sourceUrl: buildRecipeSourceUrl(config.PICNIC_COUNTRY_CODE, recipe.recipeId),
+  }))
+  return {
+    recipes,
+    pagination: {
+      offset: startIndex,
+      limit,
+      returned: recipes.length,
+      total: all.length,
+      hasMore: startIndex + limit < all.length,
+    },
+  }
+}
+
+// Get recipe tool
+const getRecipeInputSchema = z.object({
+  recipe_url_or_id: z
+    .string()
+    .describe(
+      "A Picnic recipe URL (any format) or a 24-character hex recipe ID. " +
+        "Examples: 'https://picnic.app/de/go/abc123', " +
+        "'https://picnic.app/de/rezepte/0123456789abcdef01234567/example-recipe', " +
+        "'0123456789abcdef01234567'",
+    ),
+})
+
+toolRegistry.register({
+  name: "picnic_get_recipe",
+  description:
+    "Fetch a Picnic recipe by URL or recipe ID. Returns structured recipe data: name, " +
+    "description, ingredients, preparation steps, timing, servings, image URL, saved state, " +
+    "and the canonical source URL. Accepts short share links (picnic.app/de/go/xxx), full " +
+    "recipe URLs, or bare recipe IDs.",
+  inputSchema: getRecipeInputSchema,
+  handler: async (args) => {
+    await ensureClientInitialized()
+    const client = getPicnicClient()
+    const recipeId = await resolveRecipeId(args.recipe_url_or_id)
+    const page = await client.sendRequest(
+      "GET",
+      `/pages/selling-group-details-page?selling_group_id=${encodeURIComponent(recipeId)}`,
+      null,
+      true,
+    )
+    const parsed = parseSellingGroupRecipe(page, { imageBaseUrl: recipeImageBaseUrl(client) })
+    const sourceUrl = buildRecipeSourceUrl(config.PICNIC_COUNTRY_CODE, recipeId)
+    return { recipeId, sourceUrl, ...parsed }
+  },
+})
+
+// Browse / saved recipes
+const recipeListInputSchema = z.object({
+  limit: z
+    .number()
+    .min(1)
+    .max(100)
+    .default(25)
+    .describe("Maximum number of recipes to return (1-100, default: 25)"),
+  offset: z
+    .number()
+    .min(0)
+    .default(0)
+    .describe("Number of recipes to skip for pagination (default: 0)"),
+})
+
+toolRegistry.register({
+  name: "picnic_browse_recipes",
+  description:
+    "Browse Picnic's recipe/cookbook overview to discover recipes. Returns a paginated list " +
+    "of recipes (id, name, image URL, cookbook section, source URL). Use the recipeId with " +
+    "picnic_get_recipe for full details.",
+  inputSchema: recipeListInputSchema,
+  handler: async (args) => {
+    await ensureClientInitialized()
+    const client = getPicnicClient()
+    const all = await fetchCookbookRecipes(client)
+    return paginateRecipes(all, args.offset ?? 0, args.limit ?? 25)
+  },
+})
+
+toolRegistry.register({
+  name: "picnic_get_saved_recipes",
+  description:
+    "List the recipes the user has saved/favourited in their Picnic cookbook (the " +
+    "'Gespeichert' tab), distinct from the public discovery feed. Returns id, name, image URL " +
+    "and source URL — useful for importing saved recipes elsewhere.",
+  inputSchema: recipeListInputSchema,
+  handler: async (args) => {
+    await ensureClientInitialized()
+    const client = getPicnicClient()
+    const all = await fetchCookbookRecipes(client)
+    const saved = all.filter((recipe) => recipe.segments.includes("SAVED_RECIPES"))
+    return paginateRecipes(saved, args.offset ?? 0, args.limit ?? 25)
+  },
+})
+
+toolRegistry.register({
+  name: "picnic_get_own_recipes",
+  description:
+    "List the user's own recipes (the cookbook 'Eigene Rezepte' tab — user-created recipes). " +
+    "Returns id, name, image URL and source URL.",
+  inputSchema: recipeListInputSchema,
+  handler: async (args) => {
+    await ensureClientInitialized()
+    const client = getPicnicClient()
+    const all = await fetchCookbookRecipes(client)
+    const own = all.filter((recipe) => recipe.segments.includes("USER_DEFINED_RECIPES"))
+    return paginateRecipes(own, args.offset ?? 0, args.limit ?? 25)
+  },
+})
+
+// Save / unsave recipe
+const recipeRefInputSchema = z.object({
+  recipe_url_or_id: z
+    .string()
+    .describe("A Picnic recipe URL (any format) or a 24-character hex recipe ID."),
+})
+
+toolRegistry.register({
+  name: "picnic_save_recipe",
+  description: "Save a recipe to the user's Picnic cookbook, by URL or recipe ID.",
+  inputSchema: recipeRefInputSchema,
+  handler: async (args) => {
+    await ensureClientInitialized()
+    const client = getPicnicClient()
+    const recipeId = await resolveRecipeId(args.recipe_url_or_id)
+    await client.sendRequest(
+      "POST",
+      "/pages/task/recipe-saving",
+      { payload: { recipe_id: recipeId, saved_at: new Date().toISOString() } },
+      true,
+    )
+    return { message: "Recipe saved", recipeId }
+  },
+})
+
+toolRegistry.register({
+  name: "picnic_unsave_recipe",
+  description: "Remove a recipe from the user's Picnic cookbook, by URL or recipe ID.",
+  inputSchema: recipeRefInputSchema,
+  handler: async (args) => {
+    await ensureClientInitialized()
+    const client = getPicnicClient()
+    const recipeId = await resolveRecipeId(args.recipe_url_or_id)
+    await client.sendRequest(
+      "POST",
+      "/pages/task/recipe-saving",
+      { payload: { recipe_id: recipeId, saved_at: null } },
+      true,
+    )
+    return { message: "Recipe removed from cookbook", recipeId }
+  },
+})
+
+// Add a recipe's ingredients to the basket by assigning the selling group.
+const addRecipeToCartInputSchema = z.object({
+  recipe_url_or_id: z
+    .string()
+    .describe("A Picnic recipe URL (any format) or a 24-character hex recipe ID."),
+  portions: z
+    .number()
+    .min(1)
+    .optional()
+    .describe("Number of portions to add (defaults to the recipe's default portions)."),
+})
+
+toolRegistry.register({
+  name: "picnic_add_recipe_to_cart",
+  description:
+    "Add a recipe's ingredients to the shopping cart by assigning the recipe (selling group) " +
+    "to the basket. Optionally set the number of portions.",
+  inputSchema: addRecipeToCartInputSchema,
+  handler: async (args) => {
+    await ensureClientInitialized()
+    const client = getPicnicClient()
+    const recipeId = await resolveRecipeId(args.recipe_url_or_id)
+    const payload: { selling_group_id: string; portions?: number } = { selling_group_id: recipeId }
+    if (args.portions !== undefined) payload.portions = args.portions
+    await client.sendRequest("POST", "/pages/task/assign-selling-group-to-basket", { payload }, true)
+    return {
+      message: "Recipe added to cart",
+      recipeId,
+      ...(args.portions !== undefined && { portions: args.portions }),
+    }
+  },
+})
+
+// Remove a recipe's ingredients from the basket (inverse of add_recipe_to_cart).
+toolRegistry.register({
+  name: "picnic_remove_recipe_from_cart",
+  description:
+    "Remove a recipe (selling group) from the basket, undoing picnic_add_recipe_to_cart. " +
+    "Removes only that recipe's ingredients, leaving the rest of the cart untouched.",
+  inputSchema: recipeRefInputSchema,
+  handler: async (args) => {
+    await ensureClientInitialized()
+    const client = getPicnicClient()
+    const recipeId = await resolveRecipeId(args.recipe_url_or_id)
+    await client.sendRequest(
+      "POST",
+      "/pages/task/remove-selling-group-from-basket",
+      { payload: { selling_group_id: recipeId } },
+      true,
+    )
+    return { message: "Recipe removed from cart", recipeId }
   },
 })
 
