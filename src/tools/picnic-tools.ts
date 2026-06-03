@@ -222,11 +222,9 @@ toolRegistry.register({
 
 // Recipe tools
 //
-// Picnic recipes are "selling groups". Recipe detail comes from
-// /pages/selling-group-details-page?selling_group_id=<id>, and the cookbook /
-// recipe overview from /pages/cookbook-page-content. These page routes are
-// called directly via sendRequest because the picnic-api recipe.* page methods
-// target outdated ids (recipe-details-page-root) that the API answers with 404.
+// Picnic recipes are "selling groups". Recipe detail and the cookbook overview
+// are fetched through the picnic-api recipe domain (getRecipeDetailsPage /
+// getCookbookPage), which target the selling-group page routes.
 
 // Base URL for recipe/product image derivatives, derived from the API URL, e.g.
 // https://storefront-prod.de.picnicinternational.com/static/images
@@ -235,7 +233,7 @@ function recipeImageBaseUrl(client: ReturnType<typeof getPicnicClient>): string 
 }
 
 async function fetchCookbookRecipes(client: ReturnType<typeof getPicnicClient>) {
-  const page = await client.sendRequest("GET", "/pages/cookbook-page-content", null, true)
+  const page = await client.recipe.getCookbookPage()
   return parseRecipeList(page, { imageBaseUrl: recipeImageBaseUrl(client) })
 }
 
@@ -281,12 +279,7 @@ toolRegistry.register({
     await ensureClientInitialized()
     const client = getPicnicClient()
     const recipeId = await resolveRecipeId(args.recipe_url_or_id)
-    const page = await client.sendRequest(
-      "GET",
-      `/pages/selling-group-details-page?selling_group_id=${encodeURIComponent(recipeId)}`,
-      null,
-      true,
-    )
+    const page = await client.recipe.getRecipeDetailsPage(recipeId)
     const parsed = parseSellingGroupRecipe(page, { imageBaseUrl: recipeImageBaseUrl(client) })
     const sourceUrl = buildRecipeSourceUrl(config.PICNIC_COUNTRY_CODE, recipeId)
     return { recipeId, sourceUrl, ...parsed }
