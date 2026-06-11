@@ -644,9 +644,9 @@ toolRegistry.register({
 // (Picnic Markup Language) tree that describes the rendered UI rather than
 // a clean data model. The raw payload is large (a single category page
 // returns 700+ recipes embedded in the layout tree) and not directly useful
-// for LLM consumption, so for the listing endpoints we walk the tree and
-// project a small per-recipe summary. The detail endpoint returns the raw
-// page since its content (ingredients, steps) has no stable subset yet.
+// for LLM consumption, so both the listing and the detail endpoints walk
+// the tree and project a compact summary; `full: true` bypasses the
+// projection for debugging.
 //
 // The picnic-api `recipe.getRecipesPage()` method targets `meals-page-root`,
 // which is only the navigation shell with three SUSPENSE tabs. The actual
@@ -677,6 +677,33 @@ function stripColorMarkers(s: string): string {
   return s.replace(/#\(#[0-9a-fA-F]{3,8}\)/g, "").trim()
 }
 
+// Picnic serves the NL, DE and FR markets and localizes all UI chrome. The
+// parsing below matches all three locales at once rather than plumbing
+// `config.PICNIC_COUNTRY_CODE` through: a page only ever contains one
+// locale's markers, so cross-locale false positives cannot occur. NL tokens
+// are verified against live responses; DE/FR tokens are best-effort.
+const COOKING_TIME_RE = /^\d+\s*min(\.|uten|utes)?$/i
+// Newer cookbook tiles use a compound format like
+// "15 min bereiden | 30 min totaal"; this loose token match is the fallback.
+const COOKING_TIME_TOKEN_RE = /(^|\s)\d+\s*min(\.|uten|utes)?\b/i
+const STEP_HEADER_RE = /^(stap|schritt|étape|etape)\s+\d+$/i
+const TIP_HEADER_RE = /^(tip|tipp|astuce)$/i
+/** Button/badge labels that may appear as RICH_TEXT inside a recipe block. */
+const UI_LABELS = new Set([
+  // NL
+  "Toevoegen",
+  "Nieuw",
+  "Niet alles op voorraad",
+  // DE
+  "Hinzufügen",
+  "Neu",
+  "Nicht alles auf Lager",
+  // FR
+  "Ajouter",
+  "Nouveau",
+  "Tout n'est pas en stock",
+])
+
 /**
  * Walks a FusionPage tree and returns one summary per recipe block.
  *
@@ -685,10 +712,12 @@ function stripColorMarkers(s: string): string {
  * RICH_TEXT and IMAGE descendant within it to derive a human-readable
  * title, cooking time, optional tagline, and lead image.
  *
- * Title heuristic: longest plain markdown string in the block (works for
- * both the cookbook layout — `[tagline, title, time]` — and the category
- * layout — `[title, time, "Nieuw"]`). Cooking time: a string matching
- * `<digits> min[uten]`.
+ * Title heuristic: in both the cookbook and the category layout the title
+ * is the only RICH_TEXT *not* wrapped in `#(#hexcolor)…#(#hexcolor)` color
+ * markers (taglines and the cookbook cooking time are wrapped), so we key
+ * on that structural cue; length ordering is only a tiebreaker between
+ * plain candidates. The tagline is the wrapped text that is not the
+ * cooking time.
  */
 function extractRecipesFromPage(page: unknown): RecipeSummary[] {
   const out: RecipeSummary[] = []
@@ -698,22 +727,23 @@ function extractRecipesFromPage(page: unknown): RecipeSummary[] {
     if (!node || typeof node !== "object") return
     const obj = node as Record<string, unknown>
 
-    const analytics = obj.analytics as { contexts?: Array<{ data?: Record<string, unknown> }> } | undefined
-    const recipeContext = analytics?.contexts?.find(
-      (c) => typeof c?.data?.recipe_id === "string",
-    )
+    const analytics = obj.analytics as
+      | { contexts?: Array<{ data?: Record<string, unknown> }> }
+      | undefined
+    const recipeContext = analytics?.contexts?.find((c) => typeof c?.data?.recipe_id === "string")
 
     if (recipeContext) {
       const recipeId = recipeContext.data!.recipe_id as string
       if (!seen.has(recipeId)) {
         seen.add(recipeId)
-        const texts: string[] = []
+        const texts: Array<{ text: string; wrapped: boolean }> = []
         const images: string[] = []
         const gather = (n: unknown): void => {
           if (!n || typeof n !== "object") return
           const m = n as Record<string, unknown>
           if (m.type === "RICH_TEXT" && typeof m.markdown === "string") {
-            texts.push(stripColorMarkers(m.markdown))
+            const text = stripColorMarkers(m.markdown)
+            texts.push({ text, wrapped: text !== m.markdown.trim() })
           }
           if (m.type === "IMAGE") {
             const src = m.source as { id?: string } | undefined
@@ -726,15 +756,23 @@ function extractRecipesFromPage(page: unknown): RecipeSummary[] {
         }
         gather(node)
 
-        const cookingTime = texts.find((t) => /^\d+\s*min(uten)?$/i.test(t))
-        const candidates = texts.filter(
-          (t) => t && t !== cookingTime && t !== "Toevoegen" && t !== "Nieuw" && t !== "Niet alles op voorraad",
-        )
-        // Longest remaining candidate is the title; the next-longest (if any)
-        // is the tagline (only the cookbook layout supplies one).
-        const sorted = [...candidates].sort((a, b) => b.length - a.length)
-        const title = sorted[0]
-        const tagline = sorted[1]
+        const cookingTime =
+          texts.find((t) => COOKING_TIME_RE.test(t.text))?.text ??
+          // Compound formats ("15 min bereiden | 30 min totaal") are only
+          // matched among wrapped texts so a plain title mentioning minutes
+          // cannot be mistaken for the time.
+          texts.find((t) => t.wrapped && COOKING_TIME_TOKEN_RE.test(t.text))?.text
+        const isChrome = (t: string) => !t || t === cookingTime || UI_LABELS.has(t)
+        // The title is the only plain (unwrapped) text in both layouts;
+        // length ordering is just the tiebreaker for unknown-locale labels
+        // that slip past UI_LABELS.
+        const title = texts
+          .filter((t) => !t.wrapped && !isChrome(t.text))
+          .map((t) => t.text)
+          .sort((a, b) => b.length - a.length)[0]
+        // The tagline (cookbook layout only) is color-wrapped — identified
+        // structurally, so a tagline longer than the title cannot swap the two.
+        const tagline = texts.find((t) => t.wrapped && !isChrome(t.text))?.text
 
         const summary: RecipeSummary = { recipe_id: recipeId }
         if (title) summary.title = title
@@ -787,13 +825,15 @@ function extractRecipeCategoryIds(page: unknown): string[] {
 const getRecipesInputSchema = z.object({
   category: z
     .string()
+    .regex(/^[a-z0-9_-]+$/i, "may only contain letters, digits, '-' and '_'")
     .optional()
     .describe(
-      "Optional recipe category ID (e.g. '20minuten', 'vega', 'eenpans'). " +
-        "When omitted, returns the cookbook highlights (~30 recipes) along with " +
-        "the list of available categories. When provided, returns the recipes " +
-        "in that category. Pass either the bare ID or a full 'recipe_cattree_xyz' / " +
-        "'recipe-cattree-xyz' page ID.",
+      "Optional recipe category ID (e.g. '20minuten', 'vega', 'eenpans'); " +
+        "only letters, digits, '-' and '_' are accepted. When omitted, returns " +
+        "the cookbook highlights (~30 recipes) along with the list of available " +
+        "categories. When provided, returns the recipes in that category. Pass " +
+        "either the bare ID or a full 'recipe_cattree_xyz' / 'recipe-cattree-xyz' " +
+        "page ID.",
     ),
   limit: z
     .number()
@@ -811,7 +851,10 @@ const getRecipesInputSchema = z.object({
     .default(false)
     .describe(
       "When false (default), returns a filtered list of {recipe_id, title, " +
-        "cooking_time, tagline?, image_id?}. When true, returns the raw FusionPage.",
+        "cooking_time, tagline?, image_id?}. When true, returns the raw " +
+        "FusionPage — a debugging escape hatch only: a single category page " +
+        "embeds 700+ recipes and the raw payload can exceed 1MB, which does " +
+        "not fit in an LLM context window.",
     ),
 })
 
@@ -823,12 +866,18 @@ toolRegistry.register({
     "category, returns the recipes in that category (a single category can " +
     "contain hundreds of recipes; use limit/offset to page through). Use " +
     "`picnic_get_recipe_details` afterwards to get ingredients and steps for a " +
-    "specific recipe.",
+    "specific recipe. Text extraction is verified for NL accounts and " +
+    "best-effort for DE/FR.",
   inputSchema: getRecipesInputSchema,
   handler: async (args) => {
     await ensureClientInitialized()
     const client = getPicnicClient()
 
+    // `category` is untrusted MCP input that ends up as a path segment of
+    // `/pages/${pageId}` (picnic-api does not encode it), so the input
+    // schema restricts it to the category-id alphabet — '/', '.', '?' and
+    // '#' are rejected to keep this tool from issuing arbitrary
+    // authenticated GETs against other endpoints.
     // Accept either a bare category id or a full page id; normalise to the
     // page id Picnic expects. Picnic's IDs use both '_' and '-' as separators
     // so we don't try to canonicalise — we pass through what the caller sent
@@ -1061,28 +1110,36 @@ function extractIngredientsFromList(
     // Filter out chevrons and empty strings; the order Picnic uses is
     // [name, brand?, price, unit_quantity, "(N <unit> nodig)"?, promo?].
     const cleaned = texts.filter((t) => t && t !== ">")
+    // "(75 g nodig)" — NL verified; the DE/FR labels are best-effort.
     const needed = cleaned
-      .map((t) => t.match(/^\(([^)]+)\s*nodig\)$/i)?.[1]?.trim())
+      .map((t) => t.match(/^\(([^)]+?)\s*(?:nodig|benötigt|nécessaires?)\)$/i)?.[1]?.trim())
       .find((t): t is string => Boolean(t))
     // Picnic uses `.` as decimal separator in NL and `,` in DE.
     const priceStr = cleaned.find((t) => /^\d+[.,]\d{2}$/.test(t))
     const priceCents = priceStr
       ? Math.round(parseFloat(priceStr.replace(",", ".")) * 100)
       : undefined
-    const unitQuantity = cleaned.find((t) => /^\d+(\.\d+)?\s*(g|gram|ml|l|kg|stuk|stuks)\b/i.test(t))
+    const unitQuantity = cleaned.find((t) =>
+      /^\d+(\.\d+)?\s*(g|gram|ml|l|kg|stuk|stuks)\b/i.test(t),
+    )
 
     // Name is the first non-special text. Brand (if present) is the next
     // non-numeric, non-promo, non-needed text after the name. Brands on
     // Picnic are short labels (no full sentences); guard against trailing
     // prose (e.g. allergen notes) bleeding into the brand slot.
     const specials = new Set<string>(
-      [needed, priceStr, unitQuantity, "Voeg ingrediënt toe"].filter(
-        (s): s is string => Boolean(s),
-      ),
+      [
+        needed,
+        priceStr,
+        unitQuantity,
+        "Voeg ingrediënt toe",
+        "Zutat hinzufügen",
+        "Ajouter l'ingrédient",
+      ].filter((s): s is string => Boolean(s)),
     )
-    const promoRe = /^\d+\s+voor\s+€/i
+    const promoRe = /^\d+\s+(?:voor|für|pour)\s+€/i
     const looksLikeNumberOrPromo = (t: string) =>
-      promoRe.test(t) || /^\(.*nodig\)$/i.test(t) || /^\d/.test(t)
+      promoRe.test(t) || /^\(.*(?:nodig|benötigt|nécessaires?)\)$/i.test(t) || /^\d/.test(t)
     const looksLikeBrand = (t: string) => t.length <= 40 && !/[.!?]/.test(t)
     const nonSpecial = cleaned.filter((t) => !specials.has(t) && !looksLikeNumberOrPromo(t))
     const name = nonSpecial[0]
@@ -1113,8 +1170,9 @@ function extractIngredientsFromList(
 
 /**
  * Parse the `instructions-section` block, which contains an alternating
- * sequence of `Stap N` headers / step text, optionally followed by a
- * `Tip` header / tip text.
+ * sequence of localized step headers (`Stap N` / `Schritt N` / `Étape N`)
+ * and step text, optionally followed by a localized tip header (`Tip` /
+ * `Tipp` / `Astuce`) and tip text.
  */
 function extractStepsAndTip(page: unknown): { steps: string[]; tip?: string } {
   const block = findNodeById(page, "instructions-section")
@@ -1137,10 +1195,10 @@ function extractStepsAndTip(page: unknown): { steps: string[]; tip?: string } {
   const steps: string[] = []
   let tip: string | undefined
   for (let i = 0; i < texts.length; i++) {
-    if (/^Stap\s+\d+$/i.test(texts[i]) && texts[i + 1]) {
+    if (STEP_HEADER_RE.test(texts[i]) && texts[i + 1]) {
       steps.push(texts[i + 1])
       i += 1
-    } else if (/^Tip$/i.test(texts[i]) && texts[i + 1]) {
+    } else if (TIP_HEADER_RE.test(texts[i]) && texts[i + 1]) {
       tip = texts[i + 1]
       i += 1
     }
@@ -1158,7 +1216,9 @@ function extractRecipeDetails(page: unknown, recipeId: string): RecipeDetails {
   const headerBlock = findNodeById(page, "sellable-header-container")
   const imageBlock = findNodeById(page, "selling-group-details-image-wrapper")
 
-  // Header texts come in [tagline, name, description] order.
+  // Header texts nominally come in [tagline, name, description] order, but
+  // extra chips can appear; the fields are grounded relative to the
+  // canonical name below rather than by fixed slot.
   const headerTexts: string[] = []
   const gatherText = (n: unknown): void => {
     if (!n || typeof n !== "object") return
@@ -1192,14 +1252,15 @@ function extractRecipeDetails(page: unknown, recipeId: string): RecipeDetails {
   }
   gatherImage(imageBlock)
 
-  // Cooking time: first RICH_TEXT in the page that matches `<digits> min[uten]`.
+  // Cooking time: first RICH_TEXT in the page matching the localized
+  // `<digits> min` pattern.
   let cookingTime: string | undefined
   const visitForTime = (n: unknown): void => {
     if (cookingTime || !n || typeof n !== "object") return
     const m = n as Record<string, unknown>
     if (m.type === "RICH_TEXT" && typeof m.markdown === "string") {
       const t = stripMd(m.markdown)
-      if (/^\d+\s*min(uten)?$/i.test(t)) {
+      if (COOKING_TIME_RE.test(t)) {
         cookingTime = t
         return
       }
@@ -1240,8 +1301,23 @@ function extractRecipeDetails(page: unknown, recipeId: string): RecipeDetails {
   }
   if (meta && typeof meta.recipe_name === "string") result.name = meta.recipe_name
   else if (headerTexts[1]) result.name = headerTexts[1]
-  if (headerTexts[0] && headerTexts[0] !== result.name) result.tagline = headerTexts[0]
-  if (headerTexts[2] && headerTexts[2] !== result.tagline) result.description = headerTexts[2]
+
+  // Ground tagline/description relative to where the canonical name sits in
+  // the header instead of fixed [tagline, name, description] slots, so an
+  // extra badge or duration chip cannot silently shift the fields.
+  const isChrome = (t: string) => COOKING_TIME_RE.test(t) || UI_LABELS.has(t)
+  const nameIdx = result.name ? headerTexts.indexOf(result.name) : -1
+  if (nameIdx >= 0) {
+    const before = headerTexts.slice(0, nameIdx).filter((t) => t && !isChrome(t))
+    const after = headerTexts.slice(nameIdx + 1).filter((t) => t && !isChrome(t))
+    const tagline = before[before.length - 1]
+    if (tagline && tagline !== result.name) result.tagline = tagline
+    if (after[0] && after[0] !== result.tagline) result.description = after[0]
+  } else {
+    // Name unknown or not rendered in the header — fall back to slots.
+    if (headerTexts[0] && headerTexts[0] !== result.name) result.tagline = headerTexts[0]
+    if (headerTexts[2] && headerTexts[2] !== result.tagline) result.description = headerTexts[2]
+  }
   if (cookingTime) result.cooking_time = cookingTime
   if (meta && typeof meta.portions === "number") result.portions = meta.portions
   if (imageId) result.image_id = imageId
@@ -1257,7 +1333,8 @@ const recipeDetailsInputSchema = z.object({
     .describe(
       "When false (default), returns a filtered projection with ingredients, " +
         "pantry items, cooking steps, and the variation tip. When true, returns " +
-        "the raw FusionPage (~1.7MB).",
+        "the raw FusionPage — a debugging escape hatch only: the raw page is " +
+        "~1.7MB and does not fit in an LLM context window.",
     ),
 })
 
@@ -1270,8 +1347,9 @@ toolRegistry.register({
     "keuken', and complementary suggestions), plus the numbered cooking steps " +
     "and the variation tip if present. Each ingredient includes its " +
     "selling_unit_id (usable with cart tools), name, brand, price (cents), " +
-    "unit_quantity, and the amount needed for the recipe. Set `full: true` to " +
-    "get the raw 1.7MB FusionPage instead.",
+    "unit_quantity, and the amount needed for the recipe. Text extraction is " +
+    "verified for NL accounts and best-effort for DE/FR. Set `full: true` " +
+    "(debugging only) to get the raw ~1.7MB FusionPage instead.",
   inputSchema: recipeDetailsInputSchema,
   handler: async (args) => {
     await ensureClientInitialized()
@@ -1339,4 +1417,3 @@ toolRegistry.register({
 // `picnic_remove_from_cart`, so callers can mutate the cart directly without
 // the extra recipe-stepper analytics context that the dedicated endpoints
 // would attach.
-

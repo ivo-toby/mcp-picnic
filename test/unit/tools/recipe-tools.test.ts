@@ -172,6 +172,97 @@ describe("picnic_get_recipes", () => {
     ])
   })
 
+  it("rejects a category containing path or query characters", async () => {
+    // `category` ends up in the request path unencoded downstream, so the
+    // schema must reject anything that could redirect the call to another
+    // authenticated endpoint (e.g. '../cart' resolving to /api/15/cart).
+    for (const category of ["../cart", "recipe_cattree_../cart", "vega?x=1", "a/b", "a#b", "."]) {
+      await expect(toolRegistry.executeTool("picnic_get_recipes", { category })).rejects.toThrow(
+        /Invalid input/,
+      )
+    }
+    expect(mockClient.app.getPage).not.toHaveBeenCalled()
+  })
+
+  it("keeps title and tagline apart when the tagline is longer than the title", async () => {
+    mockClient.app.getPage.mockResolvedValueOnce(
+      pageWithRecipes([
+        cookbookRecipeBlock({
+          recipeId: "rec-long",
+          tagline: "Een veel langere marketingtagline dan de titel zelf",
+          title: "Spaghetti",
+          cookingTime: "15 min",
+        }),
+      ]),
+    )
+
+    const result = await toolRegistry.executeTool("picnic_get_recipes", {})
+    const payload = JSON.parse(result.content[0].text!)
+
+    expect(payload.recipes[0].title).toBe("Spaghetti")
+    expect(payload.recipes[0].tagline).toBe("Een veel langere marketingtagline dan de titel zelf")
+  })
+
+  it("extracts compound cooking times without corrupting the title", async () => {
+    // Newer cookbook tiles carry "15 min bereiden | 30 min totaal" instead
+    // of a bare "30 min". The compound string is longer than many titles,
+    // so it must neither win the title slot nor leak into the tagline.
+    mockClient.app.getPage.mockResolvedValueOnce(
+      pageWithRecipes([
+        cookbookRecipeBlock({
+          recipeId: "rec-compound",
+          tagline: "Familiefavoriet vol groenten",
+          title: "Enchilada's met gehakt en kaas",
+          cookingTime: "15 min bereiden | 30 min totaal",
+        }),
+      ]),
+    )
+
+    const result = await toolRegistry.executeTool("picnic_get_recipes", {})
+    const payload = JSON.parse(result.content[0].text!)
+
+    expect(payload.recipes[0]).toEqual({
+      recipe_id: "rec-compound",
+      title: "Enchilada's met gehakt en kaas",
+      cooking_time: "15 min bereiden | 30 min totaal",
+      tagline: "Familiefavoriet vol groenten",
+    })
+  })
+
+  it("ignores DE UI labels and parses DE cooking times", async () => {
+    // Same cookbook structure, German chrome: button/badge labels must not
+    // win the title slot and "20 Min." must be recognized as cooking time.
+    const block = {
+      type: "PML",
+      analytics: { contexts: [{ data: { recipe_id: "rec-de" } }] },
+      pml: {
+        component: {
+          type: "STACK",
+          children: [
+            { type: "RICH_TEXT", markdown: "Hinzufügen" },
+            { type: "RICH_TEXT", markdown: "Nicht alles auf Lager" },
+            { type: "RICH_TEXT", markdown: "#(#295813)Cremig und schnell#(#295813)" },
+            { type: "RICH_TEXT", markdown: "Nudeln mit Pilzrahmsoße" },
+            { type: "RICH_TEXT", markdown: "#(#333333)20 Min.#(#333333)" },
+          ],
+        },
+      },
+    }
+    mockClient.app.getPage.mockResolvedValueOnce(pageWithRecipes([block]))
+
+    const result = await toolRegistry.executeTool("picnic_get_recipes", {})
+    const payload = JSON.parse(result.content[0].text!)
+
+    expect(payload.recipes).toEqual([
+      {
+        recipe_id: "rec-de",
+        title: "Nudeln mit Pilzrahmsoße",
+        cooking_time: "20 Min.",
+        tagline: "Cremig und schnell",
+      },
+    ])
+  })
+
   it("extracts category-page recipes (no tagline, badge ignored)", async () => {
     mockClient.app.getPage.mockResolvedValueOnce(
       pageWithRecipes([
@@ -254,9 +345,7 @@ describe("picnic_get_recipes", () => {
     ])
     // Inject category deeplinks the way Picnic does. The body.child.children
     // array is part of our test fixture so this cast is safe.
-    const children = (
-      cookbookPage.body.child as { children: unknown[] }
-    ).children
+    const children = (cookbookPage.body.child as { children: unknown[] }).children
     children.push(
       {
         type: "TOUCHABLE",
@@ -278,9 +367,7 @@ describe("picnic_get_recipes", () => {
     const result = await toolRegistry.executeTool("picnic_get_recipes", {})
     const payload = JSON.parse(result.content[0].text!)
 
-    expect(payload.categories).toEqual(
-      expect.arrayContaining(["20minuten", "jamie-oliver"]),
-    )
+    expect(payload.categories).toEqual(expect.arrayContaining(["20minuten", "jamie-oliver"]))
   })
 
   it("omits categories when a specific category was requested", async () => {
@@ -349,6 +436,10 @@ describe("picnic_get_recipe_details", () => {
     complementary?: Array<{ ingredient_id: string; selling_unit_id: string; name: string }>
     steps?: string[]
     tip?: string
+    /** Localized step-header prefix, e.g. "Schritt" (default "Stap"). */
+    stepHeaderPrefix?: string
+    /** Localized tip header, e.g. "Tipp" (default "Tip"). */
+    tipHeader?: string
   }) {
     const recipeId = opts.recipeId ?? "rec-1"
     const allIngredients = [
@@ -393,11 +484,14 @@ describe("picnic_get_recipe_details", () => {
 
     const stepsTexts: Array<{ type: string; markdown: string }> = []
     for (let i = 0; i < (opts.steps ?? []).length; i++) {
-      stepsTexts.push({ type: "RICH_TEXT", markdown: `Stap ${i + 1}` })
+      stepsTexts.push({
+        type: "RICH_TEXT",
+        markdown: `${opts.stepHeaderPrefix ?? "Stap"} ${i + 1}`,
+      })
       stepsTexts.push({ type: "RICH_TEXT", markdown: opts.steps![i] })
     }
     if (opts.tip) {
-      stepsTexts.push({ type: "RICH_TEXT", markdown: "Tip" })
+      stepsTexts.push({ type: "RICH_TEXT", markdown: opts.tipHeader ?? "Tip" })
       stepsTexts.push({ type: "RICH_TEXT", markdown: opts.tip })
     }
 
@@ -438,13 +532,9 @@ describe("picnic_get_recipe_details", () => {
               layout: {},
               size: {},
               children: [
-                ...(opts.tagline
-                  ? [{ type: "RICH_TEXT", markdown: opts.tagline }]
-                  : []),
+                ...(opts.tagline ? [{ type: "RICH_TEXT", markdown: opts.tagline }] : []),
                 ...(opts.name ? [{ type: "RICH_TEXT", markdown: opts.name }] : []),
-                ...(opts.description
-                  ? [{ type: "RICH_TEXT", markdown: opts.description }]
-                  : []),
+                ...(opts.description ? [{ type: "RICH_TEXT", markdown: opts.description }] : []),
               ],
             },
             // Image block.
@@ -552,11 +642,7 @@ describe("picnic_get_recipe_details", () => {
             name: "Jalapeno groene pepers",
           },
         ],
-        steps: [
-          "Bereid de rijst.",
-          "Maak de gehaktballetjes.",
-          "Snijd de paprika.",
-        ],
+        steps: ["Bereid de rijst.", "Maak de gehaktballetjes.", "Snijd de paprika."],
         tip: "Hou je van pittig? Voeg jalapeño toe.",
       }),
     )
@@ -606,6 +692,86 @@ describe("picnic_get_recipe_details", () => {
       "Snijd de paprika.",
     ])
     expect(payload.tip).toBe("Hou je van pittig? Voeg jalapeño toe.")
+  })
+
+  it("parses localized step and tip headers (DE and FR)", async () => {
+    mockClient.app.getPage.mockResolvedValueOnce(
+      recipeDetailsFixture({
+        recipeId: "rec-de",
+        name: "Nudeln",
+        steps: ["Nudeln kochen.", "Soße zubereiten."],
+        tip: "Mit Parmesan servieren.",
+        stepHeaderPrefix: "Schritt",
+        tipHeader: "Tipp",
+      }),
+    )
+
+    let result = await toolRegistry.executeTool("picnic_get_recipe_details", {
+      recipeId: "rec-de",
+    })
+    let payload = JSON.parse(result.content[0].text!)
+    expect(payload.steps).toEqual(["Nudeln kochen.", "Soße zubereiten."])
+    expect(payload.tip).toBe("Mit Parmesan servieren.")
+
+    mockClient.app.getPage.mockResolvedValueOnce(
+      recipeDetailsFixture({
+        recipeId: "rec-fr",
+        name: "Ratatouille",
+        steps: ["Coupez les légumes."],
+        tip: "Servez avec du riz.",
+        stepHeaderPrefix: "Étape",
+        tipHeader: "Astuce",
+      }),
+    )
+
+    result = await toolRegistry.executeTool("picnic_get_recipe_details", {
+      recipeId: "rec-fr",
+    })
+    payload = JSON.parse(result.content[0].text!)
+    expect(payload.steps).toEqual(["Coupez les légumes."])
+    expect(payload.tip).toBe("Servez avec du riz.")
+  })
+
+  it("does not let an extra header chip shift name, tagline or description", async () => {
+    // If Picnic inserts a badge or duration chip between the name and the
+    // description, the fields must stay grounded on the canonical name
+    // rather than silently shifting by slot index.
+    const fixture = recipeDetailsFixture({
+      recipeId: "rec-chip",
+      name: "Spaghetti",
+      tagline: "Klassieker",
+      description: "Een snelle doordeweekse pasta.",
+    })
+    type HeaderBlock = { id?: string; children?: Array<{ type: string; markdown: string }> }
+    const findHeader = (n: unknown): HeaderBlock | null => {
+      if (!n || typeof n !== "object") return null
+      const obj = n as HeaderBlock & Record<string, unknown>
+      if (obj.id === "sellable-header-container") return obj
+      for (const v of Object.values(obj)) {
+        if (Array.isArray(v)) {
+          for (const c of v) {
+            const r = findHeader(c)
+            if (r) return r
+          }
+        } else if (v && typeof v === "object") {
+          const r = findHeader(v)
+          if (r) return r
+        }
+      }
+      return null
+    }
+    const header = findHeader(fixture)
+    // [tagline, name, "Nieuw", description]
+    header!.children!.splice(2, 0, { type: "RICH_TEXT", markdown: "Nieuw" })
+    mockClient.app.getPage.mockResolvedValueOnce(fixture)
+
+    const result = await toolRegistry.executeTool("picnic_get_recipe_details", {
+      recipeId: "rec-chip",
+    })
+    const payload = JSON.parse(result.content[0].text!)
+    expect(payload.name).toBe("Spaghetti")
+    expect(payload.tagline).toBe("Klassieker")
+    expect(payload.description).toBe("Een snelle doordeweekse pasta.")
   })
 
   it("URL-encodes the recipe id when fetching", async () => {
@@ -803,4 +969,3 @@ describe("picnic_save_recipe / picnic_unsave_recipe", () => {
     })
   })
 })
-
