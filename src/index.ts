@@ -4,9 +4,12 @@ import { StdioServer } from "./transports/stdio.js"
 import { StreamableHttpServer } from "./transports/streamable-http.js"
 import { config } from "./config.js"
 import { initializePicnicClient } from "./utils/picnic-client.js"
+import { installFetchProxy } from "./utils/proxy.js"
 
 // Create and start the appropriate server
 async function runServer() {
+  // Route outbound fetch through HTTPS_PROXY when set, before any API call.
+  await installFetchProxy()
   await initializePicnicClient()
 
   if (config.ENABLE_HTTP_SERVER) {
