@@ -672,9 +672,11 @@ interface RecipeSummary {
   image_id?: string
 }
 
-/** Strip Picnic's inline color markers like `#(#295813)Tropisch#(#295813)`. */
-function stripColorMarkers(s: string): string {
-  return s.replace(/#\(#[0-9a-fA-F]{3,8}\)/g, "").trim()
+/** Detects Picnic's inline color markers like `#(#295813)…#(#295813)`. */
+const COLOR_MARKER_RE = /#\(#[0-9a-fA-F]{3,8}\)/
+/** True when a RICH_TEXT carries color markers (taglines / cooking time). */
+function isColorWrapped(markdown: string): boolean {
+  return COLOR_MARKER_RE.test(markdown)
 }
 
 // Picnic serves the NL, DE and FR markets and localizes all UI chrome. The
@@ -742,8 +744,9 @@ function extractRecipesFromPage(page: unknown): RecipeSummary[] {
           if (!n || typeof n !== "object") return
           const m = n as Record<string, unknown>
           if (m.type === "RICH_TEXT" && typeof m.markdown === "string") {
-            const text = stripColorMarkers(m.markdown)
-            texts.push({ text, wrapped: text !== m.markdown.trim() })
+            // `wrapped` keys on color markers only (the title is the unwrapped
+            // text); `text` also strips bold so `**…**` never leaks into a title.
+            texts.push({ text: stripMd(m.markdown), wrapped: isColorWrapped(m.markdown) })
           }
           if (m.type === "IMAGE") {
             const src = m.source as { id?: string } | undefined
@@ -800,8 +803,11 @@ function extractRecipesFromPage(page: unknown): RecipeSummary[] {
  * Returns the list of recipe-category page IDs linked from a Fusion page.
  * Picnic embeds them as deeplinks like
  * `nl.picnic-supermarkt://store/page;id=recipe_cattree_20minuten`.
- * The returned IDs strip the `recipe_cattree_` / `recipe-cattree-` prefix
- * so callers can pass them straight back into `picnic_get_recipes`.
+ * The full page ID (including its `recipe_cattree_` / `recipe-cattree-`
+ * prefix) is returned: Picnic uses both separators and the server is strict
+ * (`recipe_cattree_jamie-oliver` 404s where `recipe-cattree-jamie-oliver`
+ * resolves), so the original form must round-trip back into
+ * `picnic_get_recipes` unchanged rather than being re-prefixed.
  */
 function extractRecipeCategoryIds(page: unknown): string[] {
   const found = new Set<string>()
@@ -809,7 +815,7 @@ function extractRecipeCategoryIds(page: unknown): string[] {
     if (!node || typeof node !== "object") return
     const obj = node as Record<string, unknown>
     if (obj.actionType === "OPEN" && typeof obj.target === "string") {
-      const match = obj.target.match(/id=recipe[_-]cattree[_-]([a-z0-9_-]+)/i)
+      const match = obj.target.match(/id=(recipe[_-]cattree[_-][a-z0-9_-]+)/i)
       if (match) found.add(match[1])
     }
     for (const v of Object.values(obj)) {
@@ -831,18 +837,21 @@ const getRecipesInputSchema = z.object({
       "Optional recipe category ID (e.g. '20minuten', 'vega', 'eenpans'); " +
         "only letters, digits, '-' and '_' are accepted. When omitted, returns " +
         "the cookbook highlights (~30 recipes) along with the list of available " +
-        "categories. When provided, returns the recipes in that category. Pass " +
-        "either the bare ID or a full 'recipe_cattree_xyz' / 'recipe-cattree-xyz' " +
-        "page ID.",
+        "categories — pass those IDs back verbatim. When provided, returns the " +
+        "recipes in that category. Accepts a bare ID or a full " +
+        "'recipe_cattree_xyz' / 'recipe-cattree-xyz' page ID (the separator " +
+        "matters, so prefer the IDs returned in `categories`).",
     ),
   limit: z
     .number()
+    .int()
     .min(1)
     .max(100)
     .default(20)
     .describe("Maximum number of recipes to return (1-100, default: 20)"),
   offset: z
     .number()
+    .int()
     .min(0)
     .default(0)
     .describe("Number of recipes to skip for pagination (default: 0)"),
@@ -894,7 +903,9 @@ toolRegistry.register({
     const page = await client.app.getPage(pageId)
 
     if (args.full) {
-      return page
+      // Return compact JSON: the registry pretty-prints objects with 2-space
+      // indent, which inflates this already-oversized raw page by ~⅓.
+      return JSON.stringify(page)
     }
 
     const allRecipes = extractRecipesFromPage(page)
@@ -914,10 +925,13 @@ toolRegistry.register({
       },
     }
 
-    // Only the cookbook root carries category navigation; surface it so the
-    // LLM knows what to drill into next.
-    if (!args.category) {
-      result.categories = extractRecipeCategoryIds(page)
+    // Surface category navigation so the LLM knows what to drill into next:
+    // always on the cookbook root, and also on "theme" category pages (e.g.
+    // recipe_cattree_thema-kids) that hold only sub-category links and no
+    // recipes of their own — otherwise drilling into a theme is a dead end.
+    const categoryIds = extractRecipeCategoryIds(page)
+    if ((!args.category || allRecipes.length === 0) && categoryIds.length > 0) {
+      result.categories = categoryIds
     }
 
     return result
@@ -975,11 +989,16 @@ interface RecipeDetails {
   tip?: string
 }
 
-/** Picnic uses `#(#hexcolor)text#(#hexcolor)` markers around colored text. */
+/**
+ * Strip Picnic's `#(#hexcolor)text#(#hexcolor)` color markers and `**bold**`
+ * markup. NFC-normalizes so accented locale tokens (`Étape`, `Hinzufügen`)
+ * compare equal regardless of the response's Unicode normal form.
+ */
 function stripMd(s: string): string {
   return s
     .replace(/#\(#[0-9a-fA-F]{3,8}\)/g, "")
     .replace(/\*\*/g, "")
+    .normalize("NFC")
     .trim()
 }
 
@@ -1119,8 +1138,10 @@ function extractIngredientsFromList(
     const priceCents = priceStr
       ? Math.round(parseFloat(priceStr.replace(",", ".")) * 100)
       : undefined
+    // Accept comma decimals (like the price) and DE/FR unit words; longer
+    // units precede their prefixes (`liter` before `l`) so the match is greedy.
     const unitQuantity = cleaned.find((t) =>
-      /^\d+(\.\d+)?\s*(g|gram|ml|l|kg|stuk|stuks)\b/i.test(t),
+      /^\d+([.,]\d+)?\s*(?:gram|kg|ml|cl|liter|l|g|stuks?|stück|stuck|pièces?|pieces?)\b/i.test(t),
     )
 
     // Name is the first non-special text. Brand (if present) is the next
@@ -1138,8 +1159,16 @@ function extractIngredientsFromList(
       ].filter((s): s is string => Boolean(s)),
     )
     const promoRe = /^\d+\s+(?:voor|für|pour)\s+€/i
+    // A quantity/price token is a number followed by a space or end of string
+    // ("400 gram", "3.49"); this must NOT exclude product names that merely
+    // start with a digit ("100% pindakaas", "30+ kaas", "5-granenbrood").
+    // Any text carrying a price (e.g. the "nu €2.29" promo label) is also
+    // chrome, never a name or brand.
     const looksLikeNumberOrPromo = (t: string) =>
-      promoRe.test(t) || /^\(.*(?:nodig|benötigt|nécessaires?)\)$/i.test(t) || /^\d/.test(t)
+      promoRe.test(t) ||
+      /€/.test(t) ||
+      /^\(.*(?:nodig|benötigt|nécessaires?)\)$/i.test(t) ||
+      /^\d+([.,]\d+)?(\s|$)/.test(t)
     const looksLikeBrand = (t: string) => t.length <= 40 && !/[.!?]/.test(t)
     const nonSpecial = cleaned.filter((t) => !specials.has(t) && !looksLikeNumberOrPromo(t))
     const name = nonSpecial[0]
@@ -1192,14 +1221,20 @@ function extractStepsAndTip(page: unknown): { steps: string[]; tip?: string } {
   }
   gather(block)
 
+  // A header's body is the next text, but only if that text is not itself a
+  // header — otherwise a step with a missing body would swallow the following
+  // header as its text and drop a real step.
+  const isHeader = (t: string) => STEP_HEADER_RE.test(t) || TIP_HEADER_RE.test(t)
   const steps: string[] = []
   let tip: string | undefined
   for (let i = 0; i < texts.length; i++) {
-    if (STEP_HEADER_RE.test(texts[i]) && texts[i + 1]) {
-      steps.push(texts[i + 1])
+    const body = texts[i + 1]
+    if (!body || isHeader(body)) continue
+    if (STEP_HEADER_RE.test(texts[i])) {
+      steps.push(body)
       i += 1
-    } else if (TIP_HEADER_RE.test(texts[i]) && texts[i + 1]) {
-      tip = texts[i + 1]
+    } else if (TIP_HEADER_RE.test(texts[i])) {
+      tip = body
       i += 1
     }
   }
@@ -1364,7 +1399,9 @@ toolRegistry.register({
     )
 
     if (args.full) {
-      return page
+      // Compact JSON — avoid the registry's 2-space pretty-print inflating
+      // the ~1.7MB raw page further.
+      return JSON.stringify(page)
     }
 
     return extractRecipeDetails(page, args.recipeId)

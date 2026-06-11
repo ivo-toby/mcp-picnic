@@ -203,6 +203,44 @@ describe("picnic_get_recipes", () => {
     expect(payload.recipes[0].tagline).toBe("Een veel langere marketingtagline dan de titel zelf")
   })
 
+  it("strips bold markup from listing titles", async () => {
+    // Picnic uses **bold** in RICH_TEXT; it must not leak into list titles
+    // (the detail path already strips it) and a bold-only title must still be
+    // treated as the unwrapped title, not as a color-wrapped tagline.
+    const block = {
+      type: "PML",
+      analytics: { contexts: [{ data: { recipe_id: "rec-bold" } }] },
+      pml: {
+        component: {
+          type: "STACK",
+          children: [
+            { type: "RICH_TEXT", markdown: "**Spaghetti bolognese**" },
+            { type: "RICH_TEXT", markdown: "#(#333333)20 min#(#333333)" },
+          ],
+        },
+      },
+    }
+    mockClient.app.getPage.mockResolvedValueOnce(pageWithRecipes([block]))
+
+    const result = await toolRegistry.executeTool("picnic_get_recipes", {})
+    const payload = JSON.parse(result.content[0].text!)
+
+    expect(payload.recipes[0]).toEqual({
+      recipe_id: "rec-bold",
+      title: "Spaghetti bolognese",
+      cooking_time: "20 min",
+    })
+  })
+
+  it("rejects fractional limit and offset", async () => {
+    for (const args of [{ limit: 2.5 }, { offset: 1.5 }]) {
+      await expect(toolRegistry.executeTool("picnic_get_recipes", args)).rejects.toThrow(
+        /Invalid input/,
+      )
+    }
+    expect(mockClient.app.getPage).not.toHaveBeenCalled()
+  })
+
   it("extracts compound cooking times without corrupting the title", async () => {
     // Newer cookbook tiles carry "15 min bereiden | 30 min totaal" instead
     // of a bare "30 min". The compound string is longer than many titles,
@@ -334,6 +372,33 @@ describe("picnic_get_recipes", () => {
     })
   })
 
+  it("returns full category page IDs that round-trip back unchanged", async () => {
+    // Picnic emits both 'recipe_cattree_' and 'recipe-cattree-' separators and
+    // the server is strict about which one resolves, so the surfaced category
+    // ID must keep its original prefix (not be reduced to a bare slug) and be
+    // forwarded verbatim when passed back in.
+    const cookbookPage = pageWithRecipes([])
+    const children = (cookbookPage.body.child as { children: unknown[] }).children
+    children.push({
+      type: "TOUCHABLE",
+      onPress: {
+        actionType: "OPEN",
+        target: "nl.picnic-supermarkt://store/page;id=recipe-cattree-jamie-oliver",
+      },
+    })
+    mockClient.app.getPage.mockResolvedValueOnce(cookbookPage)
+
+    const listResult = await toolRegistry.executeTool("picnic_get_recipes", {})
+    const categories = JSON.parse(listResult.content[0].text!).categories
+    expect(categories).toEqual(["recipe-cattree-jamie-oliver"])
+
+    // Feeding the surfaced ID back must request that exact page id (the dash
+    // form), not a re-prefixed 'recipe_cattree_jamie-oliver' that would 404.
+    mockClient.app.getPage.mockResolvedValueOnce(pageWithRecipes([]))
+    await toolRegistry.executeTool("picnic_get_recipes", { category: categories[0] })
+    expect(mockClient.app.getPage).toHaveBeenLastCalledWith("recipe-cattree-jamie-oliver")
+  })
+
   it("surfaces category IDs only on the cookbook root", async () => {
     const cookbookPage = pageWithRecipes([
       cookbookRecipeBlock({
@@ -367,11 +432,17 @@ describe("picnic_get_recipes", () => {
     const result = await toolRegistry.executeTool("picnic_get_recipes", {})
     const payload = JSON.parse(result.content[0].text!)
 
-    expect(payload.categories).toEqual(expect.arrayContaining(["20minuten", "jamie-oliver"]))
+    expect(payload.categories).toEqual(
+      expect.arrayContaining(["recipe_cattree_20minuten", "recipe-cattree-jamie-oliver"]),
+    )
   })
 
   it("omits categories when a specific category was requested", async () => {
-    mockClient.app.getPage.mockResolvedValueOnce(pageWithRecipes([]))
+    mockClient.app.getPage.mockResolvedValueOnce(
+      pageWithRecipes([
+        cookbookRecipeBlock({ recipeId: "r1", tagline: "x", title: "T", cookingTime: "20 min" }),
+      ]),
+    )
 
     const result = await toolRegistry.executeTool("picnic_get_recipes", {
       category: "vega",
@@ -379,6 +450,29 @@ describe("picnic_get_recipes", () => {
     const payload = JSON.parse(result.content[0].text!)
 
     expect(payload).not.toHaveProperty("categories")
+  })
+
+  it("surfaces sub-categories when a theme category has no recipes of its own", async () => {
+    // recipe_cattree_thema-kids resolves but holds only sub-category links;
+    // those must be surfaced so drilling into a theme isn't a dead end.
+    const themePage = pageWithRecipes([])
+    const children = (themePage.body.child as { children: unknown[] }).children
+    children.push({
+      type: "TOUCHABLE",
+      onPress: {
+        actionType: "OPEN",
+        target: "nl.picnic-supermarkt://store/page;id=recipe_cattree_kids",
+      },
+    })
+    mockClient.app.getPage.mockResolvedValueOnce(themePage)
+
+    const result = await toolRegistry.executeTool("picnic_get_recipes", {
+      category: "thema-kids",
+    })
+    const payload = JSON.parse(result.content[0].text!)
+
+    expect(payload.recipes).toEqual([])
+    expect(payload.categories).toEqual(["recipe_cattree_kids"])
   })
 
   it("returns the raw FusionPage when full=true", async () => {
@@ -837,6 +931,127 @@ describe("picnic_get_recipe_details", () => {
     })
     const payload = JSON.parse(result.content[0].text!)
     expect(payload.ingredients[0].price).toBe(139)
+  })
+
+  it("parses comma-decimal and spelled-out unit quantities", async () => {
+    mockClient.app.getPage.mockResolvedValueOnce(
+      recipeDetailsFixture({
+        recipeId: "rec-units",
+        name: "Recipe",
+        ingredients: [
+          { ingredient_id: "i1", selling_unit_id: "s1", name: "Melk", unit_quantity: "1,5 l" },
+          { ingredient_id: "i2", selling_unit_id: "s2", name: "Sap", unit_quantity: "1 liter" },
+        ],
+      }),
+    )
+
+    const result = await toolRegistry.executeTool("picnic_get_recipe_details", {
+      recipeId: "rec-units",
+    })
+    const payload = JSON.parse(result.content[0].text!)
+    expect(payload.ingredients[0].unit_quantity).toBe("1,5 l")
+    expect(payload.ingredients[1].unit_quantity).toBe("1 liter")
+  })
+
+  it("keeps product names that start with a digit", async () => {
+    // Names like "100% pindakaas" / "30+ kaas" begin with a digit but are not
+    // quantities/prices and must not be filtered out of the name slot.
+    mockClient.app.getPage.mockResolvedValueOnce(
+      recipeDetailsFixture({
+        recipeId: "rec-digit",
+        name: "Recipe",
+        ingredients: [
+          {
+            ingredient_id: "i1",
+            selling_unit_id: "s1",
+            name: "100% pindakaas",
+            brand: "Calvé",
+            price: "3.49",
+            unit_quantity: "350 gram",
+          },
+        ],
+      }),
+    )
+
+    const result = await toolRegistry.executeTool("picnic_get_recipe_details", {
+      recipeId: "rec-digit",
+    })
+    const payload = JSON.parse(result.content[0].text!)
+    expect(payload.ingredients[0].name).toBe("100% pindakaas")
+    expect(payload.ingredients[0].brand).toBe("Calvé")
+  })
+
+  it("does not let a price/promo label become the ingredient name", async () => {
+    // A "nu €2.29" promo label can precede the real name in the tile; it must
+    // not win the name slot and push the real name into `brand`.
+    const fixture = recipeDetailsFixture({
+      recipeId: "rec-promo",
+      name: "Recipe",
+      ingredients: [
+        {
+          ingredient_id: "i1",
+          selling_unit_id: "s1",
+          name: "Mexicaanse roerbak",
+          price: "2.29",
+          unit_quantity: "400 gram",
+        },
+      ],
+    })
+    type Tile = { id?: string; pml?: { component?: { children?: unknown[] } } }
+    const findTile = (n: unknown): Tile | null => {
+      if (!n || typeof n !== "object") return null
+      const obj = n as Tile & Record<string, unknown>
+      if (obj.id === "core-wide-selling-unit-tile-i1") return obj
+      for (const v of Object.values(obj)) {
+        if (Array.isArray(v)) {
+          for (const c of v) {
+            const r = findTile(c)
+            if (r) return r
+          }
+        } else if (v && typeof v === "object") {
+          const r = findTile(v)
+          if (r) return r
+        }
+      }
+      return null
+    }
+    // Prepend the promo label before the name, the way Picnic orders it.
+    findTile(fixture)!.pml!.component!.children!.unshift({
+      type: "RICH_TEXT",
+      markdown: "nu €2.29",
+    })
+    mockClient.app.getPage.mockResolvedValueOnce(fixture)
+
+    const result = await toolRegistry.executeTool("picnic_get_recipe_details", {
+      recipeId: "rec-promo",
+    })
+    const payload = JSON.parse(result.content[0].text!)
+    expect(payload.ingredients[0].name).toBe("Mexicaanse roerbak")
+    expect(payload.ingredients[0].brand).toBeUndefined()
+  })
+
+  it("parses NFD-encoded localized step headers", async () => {
+    // A FR response may deliver "Étape" in NFD form (E + combining acute);
+    // matching must not depend on the Unicode normal form.
+    const nfd = "Étape".normalize("NFD")
+    expect(nfd).not.toBe("Étape") // sanity: fixture really is decomposed
+    mockClient.app.getPage.mockResolvedValueOnce(
+      recipeDetailsFixture({
+        recipeId: "rec-nfd",
+        name: "Ratatouille",
+        steps: ["Coupez les légumes."],
+        stepHeaderPrefix: nfd,
+        tipHeader: "Astuce",
+        tip: "Servez chaud.",
+      }),
+    )
+
+    const result = await toolRegistry.executeTool("picnic_get_recipe_details", {
+      recipeId: "rec-nfd",
+    })
+    const payload = JSON.parse(result.content[0].text!)
+    expect(payload.steps).toEqual(["Coupez les légumes."])
+    expect(payload.tip).toBe("Servez chaud.")
   })
 
   it("does not bleed trailing prose into the brand field", async () => {

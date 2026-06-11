@@ -1,8 +1,11 @@
 # Developer probes
 
 Manual scripts for exploring the live Picnic API during development — not
-part of the build. They authenticate the same way the MCP server does, so a
-valid login (or a saved `picnic-session.json`) must be configured.
+part of the build. They authenticate the same way the MCP server does, which
+validates its config at startup: `PICNIC_USERNAME` and `PICNIC_PASSWORD` must
+be set (e.g. in `.env`) even when a saved `picnic-session.json` exists, since
+the env vars are parsed before the session file is consulted. With a valid
+saved session the credentials aren't actually used for a fresh login.
 
 | Script                     | Purpose                                                                       |
 | -------------------------- | ----------------------------------------------------------------------------- |
