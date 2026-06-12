@@ -222,4 +222,34 @@ describe("StreamableHttpServer", () => {
     // We get a response (not 404), meaning the /mcp route exists
     expect(res.statusCode).not.toBe(404)
   })
+
+  it("cleanupSession does not recurse when transport.close() fires onclose", () => {
+    server = new StreamableHttpServer()
+    const sessionId = "regression-session"
+
+    // Faithful reproduction of the production scenario. createNewSession() wires
+    //   transport.onclose = () => cleanupSession(transport.sessionId)
+    // and the real SDK StreamableHTTPServerTransport.close() invokes onclose().
+    // Pre-fix, cleanupSession() called close() BEFORE removing the session from
+    // the map, so onclose -> cleanupSession -> close -> onclose recursed until
+    // the stack overflowed ("Maximum call stack size exceeded"). The module
+    // mock's close() does not fire onclose, which is why this was never caught.
+    const transport: any = { sessionId, onclose: undefined }
+    let closeCalls = 0
+    transport.close = () => {
+      closeCalls++
+      transport.onclose?.()
+    }
+    transport.onclose = () => {
+      if (transport.sessionId) server.cleanupSession(transport.sessionId)
+    }
+    // @ts-expect-error - private property access
+    server.transports[sessionId] = transport
+
+    expect(() => server.cleanupSession(sessionId)).not.toThrow()
+    expect(closeCalls).toBe(1)
+    // @ts-expect-error - private property access
+    expect(server.transports[sessionId]).toBeUndefined()
+    expect(server.getActiveSessions()).toHaveLength(0)
+  })
 })
