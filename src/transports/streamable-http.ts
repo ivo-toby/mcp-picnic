@@ -442,13 +442,18 @@ export class StreamableHttpServer extends BaseTransportServer {
   public cleanupSession(sessionId: string): void {
     const transport = this.transports[sessionId]
     if (transport) {
-      transport.close()
+      // Remove the session from the map BEFORE closing. transport.close()
+      // synchronously fires transport.onclose (see createNewSession), which
+      // calls cleanupSession again; deleting first makes that re-entrant call a
+      // no-op and breaks what would otherwise be unbounded recursion ending in
+      // "RangeError: Maximum call stack size exceeded".
       delete this.transports[sessionId]
       const timeout = this.sessionTimeouts.get(sessionId)
       if (timeout) {
         clearTimeout(timeout)
         this.sessionTimeouts.delete(sessionId)
       }
+      transport.close()
       this.emit("session-ended", sessionId)
     }
   }
