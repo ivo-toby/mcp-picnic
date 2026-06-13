@@ -42,19 +42,35 @@ Get product suggestions based on a query.
 
 - `query` (string): Query for product suggestions
 
+#### `picnic_get_product_details`
+
+Look up product details by selling unit ID.
+
+**Parameters:**
+
+- `productId` (string): The product selling unit ID returned by search or cart
+- `full` (boolean, optional): Return full product details, including description, allergens, nutritional info, promotions, and similar products
+
+#### `picnic_get_image`
+
+Get product image data.
+
+**Parameters:**
+
+- `imageId` (string): The image ID returned by search, cart, or product details
+- `size` (string): Image size (`tiny`, `small`, `medium`, `large`, or `extra-large`)
+
+### Removed Legacy Product Tools
+
 #### ~~`picnic_get_article`~~ (REMOVED)
 
 **This tool has been removed** because the Picnic API deprecated product detail endpoints. See [GitHub issue #23](https://github.com/MRVDH/picnic-api/issues/23).
 
-**Alternative:** Use `picnic_search` to get basic product information (id, name, price, unit).
+**Alternative:** Use `picnic_get_product_details` for product details or `picnic_search` for basic product information (id, name, price, unit).
 
-#### `picnic_get_categories`
+#### ~~`picnic_get_categories`~~ (REMOVED)
 
-Get product categories from Picnic.
-
-**Parameters:**
-
-- `depth` (number, optional): Category depth to retrieve (0-5, default: 0)
+**This tool is not available** because `picnic-api` v4 removed the underlying `getCategories()` function. Category browsing would require a new Fusion page implementation.
 
 ### Shopping Cart Management
 
@@ -157,26 +173,6 @@ Get details of the current logged-in user.
 
 Get user information including toggled features.
 
-### Lists Management
-
-#### `picnic_get_lists`
-
-Get shopping lists and sublists.
-
-**Parameters:**
-
-- `depth` (number, optional): List depth to retrieve (0-5, default: 0)
-
-#### `picnic_get_list`
-
-Get a specific list or sublist with its items.
-
-**Parameters:**
-
-- `listId` (string): The ID of the list to get
-- `subListId` (string, optional): The ID of the sub list to get
-- `depth` (number, optional): List depth to retrieve (0-5, default: 0)
-
 ### Payment & Transactions
 
 #### `picnic_get_payment_profile`
@@ -199,11 +195,9 @@ Get detailed information about a specific wallet transaction.
 
 - `transactionId` (string): The ID of the transaction to get details for
 
-### Other
+### Other Removed Legacy Tools
 
-#### `picnic_get_mgm_details`
-
-Get MGM (friends discount) details.
+The legacy `picnic_get_lists`, `picnic_get_list`, and `picnic_get_mgm_details` tools are not available because `picnic-api` v4 removed their backing APIs.
 
 ## Usage Example
 
