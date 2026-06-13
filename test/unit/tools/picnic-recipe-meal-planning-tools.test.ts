@@ -50,7 +50,7 @@ function recipePage(recipeId: string, recipeName: string) {
           contexts: [
             {
               schema: "iglu:com.picnic/product/1-0-0",
-              data: { product_id: `ingredient-${recipeId}` },
+              data: { product_id: `s-${recipeId}` },
             },
           ],
         },

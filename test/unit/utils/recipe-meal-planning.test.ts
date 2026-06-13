@@ -104,9 +104,9 @@ describe("parseRecipeIngredients", () => {
     const parsed = parseRecipeIngredients({
       body: [
         recipeContext(),
-        productTile("ingredient-de", ["Paprika Mix", "500 g", "€2,49"]),
-        productTile("ingredient-nl", ["Tomaten", "1 stuk nodig", "1.19"]),
-        productTile("ingredient-fr", ["Riz basmati", "1 paquet", "2,05 €"]),
+        productTile("s-de", ["Paprika Mix", "500 g", "€2,49"]),
+        productTile("s-nl", ["Tomaten", "1 stuk nodig", "1.19"]),
+        productTile("s-fr", ["Riz basmati", "1 paquet", "2,05 €"]),
       ],
     })
 

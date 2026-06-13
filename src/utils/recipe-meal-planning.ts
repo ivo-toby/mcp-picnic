@@ -70,8 +70,8 @@ interface RecipeContext {
   sellingUnits: SellingUnitContext[]
 }
 
-interface IngredientTile {
-  ingredientId: string
+interface ProductTile {
+  sellingUnitId: string
   name: string
   packageInfo: string
   priceCents: number | null
@@ -136,10 +136,7 @@ function isDisplayNoise(value: string): boolean {
   )
 }
 
-function extractProductDisplay(
-  ingredientId: string,
-  node: Record<string, unknown>,
-): IngredientTile {
+function extractProductDisplay(sellingUnitId: string, node: Record<string, unknown>): ProductTile {
   const markdowns: string[] = []
   collectMarkdowns(node.pml ?? node, markdowns)
 
@@ -153,15 +150,15 @@ function extractProductDisplay(
   )
 
   return {
-    ingredientId,
+    sellingUnitId,
     name: nameIndex >= 0 ? markdowns[nameIndex] : "",
     packageInfo: packageIndex >= 0 ? markdowns[packageIndex] : "",
     priceCents,
   }
 }
 
-function collectIngredientTiles(pageData: unknown): Map<string, IngredientTile> {
-  const tiles = new Map<string, IngredientTile>()
+function collectProductTiles(pageData: unknown): Map<string, ProductTile> {
+  const tiles = new Map<string, ProductTile>()
 
   function walk(value: unknown, depth: number): void {
     if (depth > 80 || !isRecord(value)) {
@@ -178,9 +175,9 @@ function collectIngredientTiles(pageData: unknown): Map<string, IngredientTile> 
     for (const context of contexts) {
       if (!isRecord(context) || !isRecord(context.data)) continue
       if (typeof context.data.product_id !== "string") continue
-      const ingredientId = context.data.product_id
-      if (!tiles.has(ingredientId)) {
-        tiles.set(ingredientId, extractProductDisplay(ingredientId, value))
+      const sellingUnitId = context.data.product_id
+      if (!tiles.has(sellingUnitId)) {
+        tiles.set(sellingUnitId, extractProductDisplay(sellingUnitId, value))
       }
     }
 
@@ -273,13 +270,13 @@ export function parseRecipeIngredients(pageData: unknown): StructuredRecipeIngre
   const context = extractRecipeContext(pageData)
   if (!context) return null
 
-  const tiles = collectIngredientTiles(pageData)
+  const tiles = collectProductTiles(pageData)
   return {
     recipeId: context.recipeId,
     recipeName: context.recipeName,
     portions: context.portions,
     ingredients: context.sellingUnits.map((unit) => {
-      const tile = tiles.get(unit.ingredientId)
+      const tile = tiles.get(unit.sellingUnitId)
       return {
         ingredientId: unit.ingredientId,
         sellingUnitId: unit.sellingUnitId,
