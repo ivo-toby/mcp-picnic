@@ -16,7 +16,7 @@ import { getPicnicClient, initializePicnicClient, saveSession } from "../utils/p
 async function ensureClientInitialized() {
   try {
     getPicnicClient()
-  } catch (error) {
+  } catch {
     // Client not initialized, initialize it now
     await initializePicnicClient()
   }
@@ -604,33 +604,11 @@ toolRegistry.register({
     await ensureClientInitialized()
     const client = getPicnicClient()
 
-    // We bypass client.verify2FACode() because sendRequest doesn't capture response headers.
-    // The Picnic API may return an updated authKey in x-picnic-auth after 2FA verification.
-    const url = client.url
-    const authKey = client.authKey
-    const response = await fetch(`${url}/user/2fa/verify`, {
-      method: "POST",
-      headers: {
-        "User-Agent": "okhttp/3.12.2",
-        "Content-Type": "application/json; charset=UTF-8",
-        ...(authKey && { "x-picnic-auth": authKey }),
-        "x-picnic-agent": "30100;1.15.232-15154",
-        "x-picnic-did": "3C417201548B2E3B",
-      },
-      body: JSON.stringify({ otp: args.code }),
-    })
-
-    if (!response.ok) {
-      throw new Error(`2FA verification failed: ${response.status} ${response.statusText}`)
-    }
-
-    // Capture updated auth key if the API returns one
-    const newAuthKey = response.headers.get("x-picnic-auth")
-    if (newAuthKey) {
-      client.authKey = newAuthKey
-    }
-
+    // verify2FACode replaces the client's auth key with the refreshed one from
+    // the response, so the session must be persisted again afterwards.
+    await client.auth.verify2FACode(args.code)
     await saveSession()
+
     return {
       message: "2FA code verified",
       code: args.code,

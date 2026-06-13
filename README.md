@@ -387,6 +387,13 @@ PICNIC_SESSION_FILE=~/.picnic-session.json
 
 # Picnic API settings (optional)
 PICNIC_API_VERSION=15
+
+# Device identity sent to the Picnic API (optional)
+# Defaults are provided by the picnic-api library; override these only if
+# Picnic starts rejecting requests (e.g. 2FA codes not arriving) before the
+# library ships updated defaults.
+PICNIC_DEVICE_ID=3C417201548B2E3B
+PICNIC_AGENT="30100;1.228.1-15480;"
 ```
 
 #### Country Configuration

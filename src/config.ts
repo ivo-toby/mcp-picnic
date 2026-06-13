@@ -11,6 +11,9 @@ const configSchema = z.object({
   PICNIC_USERNAME: z.string(),
   PICNIC_PASSWORD: z.string(),
   PICNIC_COUNTRY_CODE: z.enum(["NL", "DE", "FR"]).default("NL"),
+  PICNIC_API_VERSION: z.string().default("15"),
+  PICNIC_DEVICE_ID: z.string().optional(),
+  PICNIC_AGENT: z.string().optional(),
   ENABLE_HTTP_SERVER: z
     .string()
     .transform((val) => val === "true")
