@@ -10,7 +10,7 @@ async function loadSession(): Promise<string | null> {
     const data = await fs.readFile(config.PICNIC_SESSION_FILE, "utf-8")
     const session = JSON.parse(data)
     return session.authKey || null
-  } catch (error) {
+  } catch {
     return null
   }
 }
@@ -26,8 +26,8 @@ export async function saveSession(): Promise<void> {
 export async function initializePicnicClient(
   username?: string,
   password?: string,
-  countryCode?: "NL" | "DE",
-  apiVersion: string = "15",
+  countryCode?: "NL" | "DE" | "FR",
+  apiVersion?: string,
 ): Promise<void> {
   if (picnicClientInstance) {
     return
@@ -42,8 +42,10 @@ export async function initializePicnicClient(
 
   const client = new PicnicClient({
     countryCode: loginCountryCode,
-    apiVersion,
+    apiVersion: apiVersion || config.PICNIC_API_VERSION,
     authKey: savedAuthKey ?? undefined,
+    deviceId: config.PICNIC_DEVICE_ID,
+    agent: config.PICNIC_AGENT,
   })
 
   if (savedAuthKey) {
@@ -53,7 +55,7 @@ export async function initializePicnicClient(
       picnicClientInstance = client
       console.error("Successfully reused saved session.")
       return
-    } catch (error) {
+    } catch {
       console.error("Saved session invalid, performing fresh login...")
       client.authKey = null // Clear invalid key before login
     }
