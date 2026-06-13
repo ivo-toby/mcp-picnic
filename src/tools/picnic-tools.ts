@@ -7,6 +7,11 @@ import {
   parseRecipeList,
   buildRecipeSourceUrl,
 } from "../utils/recipe-parser.js"
+import {
+  buildShoppingList,
+  findMealCombinations,
+  parseRecipeIngredients,
+} from "../utils/recipe-meal-planning.js"
 import { config } from "../config.js"
 
 /**
@@ -421,7 +426,12 @@ toolRegistry.register({
     const recipeId = await resolveRecipeId(args.recipe_url_or_id)
     const payload: { selling_group_id: string; portions?: number } = { selling_group_id: recipeId }
     if (args.portions !== undefined) payload.portions = args.portions
-    await client.sendRequest("POST", "/pages/task/assign-selling-group-to-basket", { payload }, true)
+    await client.sendRequest(
+      "POST",
+      "/pages/task/assign-selling-group-to-basket",
+      { payload },
+      true,
+    )
     return {
       message: "Recipe added to cart",
       recipeId,
@@ -449,6 +459,128 @@ toolRegistry.register({
     )
     return { message: "Recipe removed from cart", recipeId }
   },
+})
+
+// Recipe meal-planning tools
+const recipeIngredientsInputSchema = z.object({
+  recipe_url_or_id: z
+    .string()
+    .describe("A Picnic recipe URL (any format) or a 24- or 32-character hex recipe ID."),
+})
+
+async function fetchRecipeIngredientsByRef(
+  client: ReturnType<typeof getPicnicClient>,
+  recipeUrlOrId: string,
+) {
+  const recipeId = await resolveRecipeId(recipeUrlOrId)
+  const page = await client.sendRequest(
+    "GET",
+    `/pages/selling-group-details-page?selling_group_id=${encodeURIComponent(recipeId)}`,
+    null,
+    true,
+  )
+  const parsed = parseRecipeIngredients(page)
+  if (!parsed) throw new Error(`Could not find recipe ingredient data for ${recipeId}`)
+  return parsed
+}
+
+function getErrorMessage(error: unknown): string {
+  return error instanceof Error ? error.message : String(error)
+}
+
+toolRegistry.register({
+  name: "picnic_get_recipe_ingredients",
+  description:
+    "Fetch structured Picnic recipe ingredients by recipe URL or ID. Returns selling-unit IDs, " +
+    "quantities, pantry flags, package display text, and prices for meal planning.",
+  inputSchema: recipeIngredientsInputSchema,
+  handler: async (args) => {
+    await ensureClientInitialized()
+    return fetchRecipeIngredientsByRef(getPicnicClient(), args.recipe_url_or_id)
+  },
+})
+
+toolRegistry.register({
+  name: "picnic_get_multiple_recipe_ingredients",
+  description:
+    "Fetch structured ingredient lists for multiple Picnic recipes. Returns successful recipes " +
+    "and per-input errors so one unavailable recipe does not discard the whole batch.",
+  inputSchema: z.object({
+    recipe_urls_or_ids: z
+      .array(z.string())
+      .min(1)
+      .max(20)
+      .describe("Picnic recipe URLs or 24-/32-character recipe IDs, up to 20."),
+  }),
+  handler: async (args) => {
+    await ensureClientInitialized()
+    const client = getPicnicClient()
+    const results = await Promise.allSettled(
+      args.recipe_urls_or_ids.map((input) => fetchRecipeIngredientsByRef(client, input)),
+    )
+
+    return {
+      recipes: results.flatMap((result) => (result.status === "fulfilled" ? [result.value] : [])),
+      errors: results.flatMap((result, index) =>
+        result.status === "rejected"
+          ? [{ input: args.recipe_urls_or_ids[index], error: getErrorMessage(result.reason) }]
+          : [],
+      ),
+    }
+  },
+})
+
+const recipeIngredientSchema = z.object({
+  ingredientId: z.string(),
+  sellingUnitId: z.string(),
+  name: z.string(),
+  packageInfo: z.string(),
+  priceCents: z.number().nullable(),
+  quantity: z.number(),
+  isPantryItem: z.boolean(),
+})
+
+const structuredRecipeIngredientsSchema = z.object({
+  recipeId: z.string(),
+  recipeName: z.string(),
+  portions: z.number(),
+  ingredients: z.array(recipeIngredientSchema),
+})
+
+toolRegistry.register({
+  name: "picnic_build_shopping_list",
+  description:
+    "Consolidate structured recipe ingredients into a shopping list. Skips pantry items, " +
+    "deduplicates products per recipe, and totals priceCents times quantity.",
+  inputSchema: z.object({
+    recipes: z.array(structuredRecipeIngredientsSchema).min(1).max(20),
+  }),
+  handler: async (args) => buildShoppingList(args.recipes),
+})
+
+toolRegistry.register({
+  name: "picnic_find_meal_combinations",
+  description:
+    "Rank combinations of structured Picnic recipes by shared non-pantry ingredients, " +
+    "using the same conservative cost calculation as picnic_build_shopping_list.",
+  inputSchema: z.object({
+    recipes: z.array(structuredRecipeIngredientsSchema).min(2).max(50),
+    count: z.number().int().min(2).describe("Number of recipes per combination."),
+    topK: z
+      .number()
+      .int()
+      .min(1)
+      .max(20)
+      .default(5)
+      .describe("Maximum number of combinations to return."),
+    maxTotalBudgetCents: z
+      .number()
+      .int()
+      .min(0)
+      .optional()
+      .describe("Exclude combinations whose conservative shopping-list cost exceeds this."),
+  }),
+  handler: async (args) => findMealCombinations(args),
 })
 
 // Get shopping cart tool
@@ -853,4 +985,3 @@ toolRegistry.register({
     }
   },
 })
-
