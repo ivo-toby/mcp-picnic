@@ -409,4 +409,36 @@ describe("StreamableHttpServer", () => {
 
     expect(sessionsRes.statusCode).toBe(200)
   })
+
+  it("should not recurse when transport close fires onclose during session cleanup", () => {
+    server = new StreamableHttpServer({ enableRequestLogging: false })
+    const sessionId = "regression-session"
+
+    const transport: {
+      sessionId: string
+      closeCalls: number
+      onclose?: () => void
+      close: () => void
+    } = {
+      sessionId,
+      closeCalls: 0,
+      close() {
+        this.closeCalls++
+        this.onclose?.()
+      },
+    }
+
+    transport.onclose = () => {
+      if (transport.sessionId) {
+        server.cleanupSession(transport.sessionId)
+      }
+    }
+
+    // @ts-expect-error - private property access
+    server.transports[sessionId] = transport
+
+    expect(() => server.cleanupSession(sessionId)).not.toThrow()
+    expect(transport.closeCalls).toBe(1)
+    expect(server.getActiveSessions()).toEqual([])
+  })
 })

@@ -489,13 +489,13 @@ export class StreamableHttpServer extends BaseTransportServer {
   public cleanupSession(sessionId: string): void {
     const transport = this.transports[sessionId]
     if (transport) {
-      transport.close()
       delete this.transports[sessionId]
       const timeout = this.sessionTimeouts.get(sessionId)
       if (timeout) {
         clearTimeout(timeout)
         this.sessionTimeouts.delete(sessionId)
       }
+      transport.close()
       this.emit("session-ended", sessionId)
     }
   }
