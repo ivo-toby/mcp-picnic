@@ -2,18 +2,18 @@ import { describe, it, expect, beforeEach, vi } from "vitest"
 
 // Mock the picnic client wrapper so no real API calls are made
 const mockGenerate2FACode = vi.fn()
-const mockVerify2FACode = vi.fn()
+const mockVerifyPicnic2FACode = vi.fn()
 const mockSaveSession = vi.fn()
 
 vi.mock("../../../src/utils/picnic-client.js", () => ({
   getPicnicClient: () => ({
     auth: {
       generate2FACode: mockGenerate2FACode,
-      verify2FACode: mockVerify2FACode,
     },
   }),
   initializePicnicClient: vi.fn(),
   saveSession: () => mockSaveSession(),
+  verifyPicnic2FACode: (code: string) => mockVerifyPicnic2FACode(code),
 }))
 
 async function getRegistry() {
@@ -60,18 +60,18 @@ describe("picnic 2FA tools", () => {
 
   describe("picnic_verify_2fa_code", () => {
     it("should verify the code and persist the refreshed session", async () => {
-      mockVerify2FACode.mockResolvedValue({ authKey: "refreshed-auth-key" })
+      mockVerifyPicnic2FACode.mockResolvedValue({ authKey: "refreshed-auth-key" })
 
       const registry = await getRegistry()
       const result = await registry.executeTool("picnic_verify_2fa_code", { code: "123456" })
 
-      expect(mockVerify2FACode).toHaveBeenCalledWith("123456")
+      expect(mockVerifyPicnic2FACode).toHaveBeenCalledWith("123456")
       expect(mockSaveSession).toHaveBeenCalled()
       expect(result.content[0].text).toContain("2FA code verified")
     })
 
     it("should propagate verification failures without saving the session", async () => {
-      mockVerify2FACode.mockRejectedValue(new Error("2FA verification failed: invalid code"))
+      mockVerifyPicnic2FACode.mockRejectedValue(new Error("2FA verification failed: invalid code"))
 
       const registry = await getRegistry()
       await expect(registry.executeTool("picnic_verify_2fa_code", { code: "000000" })).rejects.toThrow(
