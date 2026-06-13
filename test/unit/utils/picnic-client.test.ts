@@ -19,6 +19,9 @@ vi.mock("picnic-api", () => {
       auth: { login: mockLogin },
       cart: { getCart: mockGetCart },
       authKey: opts?.authKey ?? "fresh-auth-key",
+      url: "https://example.test/api/15",
+      baseHeaders: { "x-picnic-auth": opts?.authKey ?? "fresh-auth-key" },
+      picnicHeaders: { "x-picnic-agent": "agent", "x-picnic-did": "device" },
     })),
   }
 })
@@ -36,6 +39,7 @@ vi.mock("../../../src/config.js", () => ({
 describe("picnic-client session persistence", () => {
   beforeEach(async () => {
     vi.clearAllMocks()
+    vi.unstubAllGlobals()
     // Reset the module to clear the singleton between tests
     vi.resetModules()
   })
@@ -149,6 +153,29 @@ describe("picnic-client session persistence", () => {
       await saveSession()
 
       expect(fs.writeFile).not.toHaveBeenCalled()
+    })
+  })
+
+  describe("verifyPicnic2FACode", () => {
+    it("should timeout a stalled 2FA verification request", async () => {
+      vi.mocked(fs.readFile).mockRejectedValue(new Error("ENOENT"))
+      mockLogin.mockResolvedValue(undefined)
+
+      const fetchMock = vi.fn((_url: string, init?: RequestInit) => {
+        return new Promise((_resolve, reject) => {
+          init?.signal?.addEventListener("abort", () =>
+            reject(new DOMException("Aborted", "AbortError")),
+          )
+        })
+      })
+      vi.stubGlobal("fetch", fetchMock)
+
+      const { initializePicnicClient, verifyPicnic2FACode } = await importClient()
+      await initializePicnicClient()
+
+      await expect(verifyPicnic2FACode("123456", 1)).rejects.toThrow(
+        "2FA verification timed out after 1ms",
+      )
     })
   })
 

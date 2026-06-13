@@ -1,6 +1,11 @@
 import { z } from "zod"
 import { toolRegistry } from "./registry.js"
-import { getPicnicClient, initializePicnicClient, saveSession } from "../utils/picnic-client.js"
+import {
+  getPicnicClient,
+  initializePicnicClient,
+  saveSession,
+  verifyPicnic2FACode,
+} from "../utils/picnic-client.js"
 import {
   resolveRecipeId,
   parseSellingGroupRecipe,
@@ -972,11 +977,7 @@ toolRegistry.register({
   inputSchema: verify2FAInputSchema,
   handler: async (args) => {
     await ensureClientInitialized()
-    const client = getPicnicClient()
-
-    // verify2FACode replaces the client's auth key with the refreshed one from
-    // the response, so the session must be persisted again afterwards.
-    await client.auth.verify2FACode(args.code)
+    await verifyPicnic2FACode(args.code)
     await saveSession()
 
     return {

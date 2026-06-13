@@ -63,6 +63,56 @@ export async function saveSession(): Promise<void> {
   }
 }
 
+export async function verifyPicnic2FACode(
+  code: string,
+  timeoutMs: number = 30000,
+): Promise<{ authKey: string }> {
+  const client = getPicnicClient()
+  const controller = new AbortController()
+  const timeout = setTimeout(() => controller.abort(), timeoutMs)
+
+  try {
+    const response = await fetch(`${client.url}/user/2fa/verify`, {
+      method: "POST",
+      headers: new Headers({
+        ...client.baseHeaders,
+        ...client.picnicHeaders,
+      }),
+      body: JSON.stringify({ otp: code }),
+      signal: controller.signal,
+    })
+
+    if (!response.ok) {
+      const body = await response.text()
+      try {
+        const errorData = JSON.parse(body)
+        const message = errorData.error?.message || response.statusText
+        throw new Error(`2FA verification failed: ${message}`)
+      } catch (error) {
+        if (error instanceof Error && !(error instanceof SyntaxError)) {
+          throw error
+        }
+        throw new Error(`2FA verification failed: ${response.status} ${response.statusText}`)
+      }
+    }
+
+    const authKey = response.headers.get("x-picnic-auth")
+    if (!authKey) {
+      throw new Error("2FA verification failed: No auth key received.")
+    }
+
+    client.authKey = authKey
+    return { authKey }
+  } catch (error) {
+    if (error instanceof Error && error.name === "AbortError") {
+      throw new Error(`2FA verification timed out after ${timeoutMs}ms`)
+    }
+    throw error
+  } finally {
+    clearTimeout(timeout)
+  }
+}
+
 export async function initializePicnicClient(
   username?: string,
   password?: string,
