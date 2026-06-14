@@ -6,6 +6,7 @@ import dotenv from "dotenv"
 dotenv.config()
 
 const defaultSessionFile = path.join(os.homedir(), ".picnic-session.json")
+const defaultDeviceFile = path.join(os.homedir(), ".picnic-device.json")
 
 const configSchema = z.object({
   PICNIC_USERNAME: z.string(),
@@ -13,6 +14,7 @@ const configSchema = z.object({
   PICNIC_COUNTRY_CODE: z.enum(["NL", "DE", "FR"]).default("NL"),
   PICNIC_API_VERSION: z.string().default("15"),
   PICNIC_DEVICE_ID: z.string().optional(),
+  PICNIC_DEVICE_FILE: z.string().default(defaultDeviceFile),
   PICNIC_AGENT: z.string().optional(),
   ENABLE_HTTP_SERVER: z
     .string()
