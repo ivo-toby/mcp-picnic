@@ -31,8 +31,11 @@ RUN addgroup -S -g ${APP_UID} mcp \
   && mkdir -p /app/data \
   && chown -R mcp:mcp /app
 
-# Default session location inside the container (can be overridden)
+# Default session and device-id locations inside the container (can be
+# overridden). Both live on the persisted /app/data volume so the generated
+# device id survives container restarts instead of being regenerated each run.
 ENV PICNIC_SESSION_FILE=/app/data/picnic-session.json
+ENV PICNIC_DEVICE_FILE=/app/data/picnic-device.json
 
 HEALTHCHECK --interval=30s --timeout=5s --start-period=20s --retries=3 \
   CMD node -e "fetch('http://127.0.0.1:3000/health').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"
