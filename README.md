@@ -341,6 +341,7 @@ Notes:
 - The container runs as a non-root user (UID `1638`).
 - Session persistence is configured via volume `picnic-data` mapped to `/app/data`.
 - `PICNIC_SESSION_FILE` defaults to `/app/data/picnic-session.json` in the container.
+- `PICNIC_DEVICE_FILE` defaults to `/app/data/picnic-device.json` in the container, so a generated device id is persisted on the same volume and reused across restarts.
 
 ### Configuration
 

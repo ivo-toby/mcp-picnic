@@ -33,6 +33,7 @@ vi.mock("../../../src/config.js", () => ({
     PICNIC_PASSWORD: "test-pass",
     PICNIC_COUNTRY_CODE: "NL",
     PICNIC_SESSION_FILE: "picnic-session.json",
+    PICNIC_DEVICE_FILE: "picnic-device.json",
   },
 }))
 
@@ -109,7 +110,12 @@ describe("picnic-client session persistence", () => {
 
       await expect(initializePicnicClient()).resolves.toBeUndefined()
       expect(() => getPicnicClient()).not.toThrow()
-      expect(fs.writeFile).not.toHaveBeenCalled()
+      // The device-id resolver may persist a generated id, but no session
+      // should be written while 2FA is still pending.
+      expect(fs.writeFile).not.toHaveBeenCalledWith(
+        "picnic-session.json",
+        expect.anything(),
+      )
     })
 
     it("should keep running when login throws a TOTP wording variant", async () => {
@@ -120,7 +126,10 @@ describe("picnic-client session persistence", () => {
 
       await expect(initializePicnicClient()).resolves.toBeUndefined()
       expect(() => getPicnicClient()).not.toThrow()
-      expect(fs.writeFile).not.toHaveBeenCalled()
+      expect(fs.writeFile).not.toHaveBeenCalledWith(
+        "picnic-session.json",
+        expect.anything(),
+      )
     })
 
     it("should keep running when login throws a structured 2FA error", async () => {
@@ -131,7 +140,10 @@ describe("picnic-client session persistence", () => {
 
       await expect(initializePicnicClient()).resolves.toBeUndefined()
       expect(() => getPicnicClient()).not.toThrow()
-      expect(fs.writeFile).not.toHaveBeenCalled()
+      expect(fs.writeFile).not.toHaveBeenCalledWith(
+        "picnic-session.json",
+        expect.anything(),
+      )
     })
 
     it("should not re-initialize if already initialized", async () => {
