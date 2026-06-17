@@ -244,8 +244,57 @@ function recipeImageBaseUrl(client: ReturnType<typeof getPicnicClient>): string 
   return client.url.replace(/\/api\/.*$/, "/static/images")
 }
 
+const RECIPE_CATEGORY_INPUT_RE = /^(?:recipe[_-]cattree[_-])?[a-z0-9]+(?:[a-z0-9_-]*[a-z0-9])?$/i
+const RECIPE_CATEGORY_PAGE_ID_RE = /recipe[_-]cattree[_-][a-z0-9]+(?:[a-z0-9_-]*[a-z0-9])?/gi
+const RECIPE_CATEGORY_PREFIX_RE = /^recipe[_-]cattree[_-]/i
+
+async function fetchRecipePage(client: ReturnType<typeof getPicnicClient>, pageId: string) {
+  const page = await client.sendRequest("GET", `/pages/${pageId}`, null, true)
+  return { pageId, page }
+}
+
+async function fetchRecipeListPage(client: ReturnType<typeof getPicnicClient>, category?: string) {
+  if (!category) return fetchRecipePage(client, "cookbook-page-content")
+
+  if (RECIPE_CATEGORY_PREFIX_RE.test(category)) {
+    return fetchRecipePage(client, category)
+  }
+
+  const underscorePageId = `recipe_cattree_${category}`
+  try {
+    return await fetchRecipePage(client, underscorePageId)
+  } catch (error) {
+    const dashPageId = `recipe-cattree-${category}`
+    try {
+      return await fetchRecipePage(client, dashPageId)
+    } catch {
+      throw error
+    }
+  }
+}
+
+function extractRecipeCategoryIds(page: unknown): string[] {
+  const ids = new Set<string>()
+
+  const visit = (node: unknown): void => {
+    if (typeof node === "string") {
+      for (const match of node.matchAll(RECIPE_CATEGORY_PAGE_ID_RE)) ids.add(match[0])
+      return
+    }
+    if (Array.isArray(node)) {
+      for (const child of node) visit(child)
+      return
+    }
+    if (!node || typeof node !== "object") return
+    for (const value of Object.values(node as Record<string, unknown>)) visit(value)
+  }
+
+  visit(page)
+  return [...ids]
+}
+
 async function fetchCookbookRecipes(client: ReturnType<typeof getPicnicClient>) {
-  const page = await client.sendRequest("GET", "/pages/cookbook-page-content", null, true)
+  const { page } = await fetchRecipeListPage(client)
   return parseRecipeList(page, { imageBaseUrl: recipeImageBaseUrl(client) })
 }
 
@@ -271,6 +320,7 @@ function paginateRecipes(all: ReturnType<typeof parseRecipeList>, offset: number
 const getRecipeInputSchema = z.object({
   recipe_url_or_id: z
     .string()
+    .min(1)
     .describe(
       "A Picnic recipe URL (any format) or a 24-character hex recipe ID. " +
         "Examples: 'https://picnic.app/de/go/abc123', " +
@@ -305,6 +355,16 @@ toolRegistry.register({
 
 // Browse / saved recipes
 const recipeListInputSchema = z.object({
+  category: z
+    .string()
+    .regex(
+      RECIPE_CATEGORY_INPUT_RE,
+      "Use a bare recipe category ID or a full recipe_cattree/recipe-cattree page ID.",
+    )
+    .optional()
+    .describe(
+      "Recipe category ID, such as '20minuten', or full page ID, such as 'recipe-cattree-jamie-oliver'.",
+    ),
   limit: z
     .number()
     .min(1)
@@ -321,15 +381,21 @@ const recipeListInputSchema = z.object({
 toolRegistry.register({
   name: "picnic_browse_recipes",
   description:
-    "Browse Picnic's recipe/cookbook overview to discover recipes. Returns a paginated list " +
-    "of recipes (id, name, image URL, cookbook section, source URL). Use the recipeId with " +
-    "picnic_get_recipe for full details.",
+    "Browse Picnic's recipe/cookbook overview or a specific recipe category. Returns a " +
+    "paginated list of recipes (id, name, image URL, cookbook section, source URL) and " +
+    "category page IDs when available. Use the recipeId with picnic_get_recipe for full details.",
   inputSchema: recipeListInputSchema,
   handler: async (args) => {
     await ensureClientInitialized()
     const client = getPicnicClient()
-    const all = await fetchCookbookRecipes(client)
-    return paginateRecipes(all, args.offset ?? 0, args.limit ?? 25)
+    const { pageId, page } = await fetchRecipeListPage(client, args.category)
+    const all = parseRecipeList(page, { imageBaseUrl: recipeImageBaseUrl(client) })
+    const result = { pageId, ...paginateRecipes(all, args.offset ?? 0, args.limit ?? 25) }
+    const categories = extractRecipeCategoryIds(page)
+    if ((!args.category || all.length === 0) && categories.length > 0) {
+      return { ...result, categories }
+    }
+    return result
   },
 })
 
@@ -368,6 +434,7 @@ toolRegistry.register({
 const recipeRefInputSchema = z.object({
   recipe_url_or_id: z
     .string()
+    .min(1)
     .describe("A Picnic recipe URL (any format) or a 24-character hex recipe ID."),
 })
 
@@ -411,6 +478,7 @@ toolRegistry.register({
 const addRecipeToCartInputSchema = z.object({
   recipe_url_or_id: z
     .string()
+    .min(1)
     .describe("A Picnic recipe URL (any format) or a 24-character hex recipe ID."),
   portions: z
     .number()
@@ -470,6 +538,7 @@ toolRegistry.register({
 const recipeIngredientsInputSchema = z.object({
   recipe_url_or_id: z
     .string()
+    .min(1)
     .describe("A Picnic recipe URL (any format) or a 24- or 32-character hex recipe ID."),
 })
 
@@ -512,7 +581,7 @@ toolRegistry.register({
     "and per-input errors so one unavailable recipe does not discard the whole batch.",
   inputSchema: z.object({
     recipe_urls_or_ids: z
-      .array(z.string())
+      .array(z.string().min(1))
       .min(1)
       .max(20)
       .describe("Picnic recipe URLs or 24-/32-character recipe IDs, up to 20."),

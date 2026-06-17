@@ -195,6 +195,101 @@ Get detailed information about a specific wallet transaction.
 
 - `transactionId` (string): The ID of the transaction to get details for
 
+### Recipes & Meal Planning
+
+#### `picnic_browse_recipes`
+
+Browse Picnic cookbook recipes. Without a `category`, this returns cookbook highlights plus available recipe category page IDs when Picnic exposes them. With a `category`, this fetches that category page.
+
+**Parameters:**
+
+- `category` (string, optional): Bare category ID (for example `"20minuten"`) or full page ID (for example `"recipe-cattree-jamie-oliver"`)
+- `limit` (number, optional): Maximum number of recipes to return (1-100, default: 25)
+- `offset` (number, optional): Number of recipes to skip for pagination (default: 0)
+
+#### `picnic_get_recipe`
+
+Fetch a Picnic recipe by URL or recipe ID.
+
+**Parameters:**
+
+- `recipe_url_or_id` (string): A Picnic recipe URL or 24-/32-character recipe ID
+
+#### `picnic_get_saved_recipes`
+
+List recipes saved in the user's Picnic cookbook.
+
+**Parameters:**
+
+- `limit` (number, optional): Maximum number of recipes to return (1-100, default: 25)
+- `offset` (number, optional): Number of recipes to skip for pagination (default: 0)
+
+#### `picnic_get_own_recipes`
+
+List user-created Picnic recipes.
+
+**Parameters:**
+
+- `limit` (number, optional): Maximum number of recipes to return (1-100, default: 25)
+- `offset` (number, optional): Number of recipes to skip for pagination (default: 0)
+
+#### `picnic_save_recipe`
+
+Save a recipe to the user's Picnic cookbook.
+
+**Parameters:**
+
+- `recipe_url_or_id` (string): A Picnic recipe URL or 24-/32-character recipe ID
+
+#### `picnic_unsave_recipe`
+
+Remove a recipe from the user's Picnic cookbook.
+
+**Parameters:**
+
+- `recipe_url_or_id` (string): A Picnic recipe URL or 24-/32-character recipe ID
+
+#### `picnic_add_recipe_to_cart`
+
+Add a recipe's ingredients to the shopping cart by assigning the recipe selling group to the basket.
+
+**Parameters:**
+
+- `recipe_url_or_id` (string): A Picnic recipe URL or 24-/32-character recipe ID
+- `portions` (number, optional): Number of portions to add
+
+#### `picnic_remove_recipe_from_cart`
+
+Remove a recipe's ingredients from the shopping cart.
+
+**Parameters:**
+
+- `recipe_url_or_id` (string): A Picnic recipe URL or 24-/32-character recipe ID
+
+#### `picnic_get_recipe_ingredients`
+
+Fetch structured recipe ingredients for meal planning.
+
+**Parameters:**
+
+- `recipe_url_or_id` (string): A Picnic recipe URL or 24-/32-character recipe ID
+
+#### `picnic_get_multiple_recipe_ingredients`
+
+Fetch structured ingredients for multiple recipes.
+
+**Parameters:**
+
+- `recipe_urls_or_ids` (array of strings): Picnic recipe URLs or 24-/32-character recipe IDs, up to 20
+
+#### `picnic_build_shopping_list`
+
+Consolidate structured recipe ingredients into a shopping list.
+
+#### `picnic_find_meal_combinations`
+
+Rank recipe combinations by shared non-pantry ingredients and optional budget.
+
 ### Other Removed Legacy Tools
 
 The legacy `picnic_get_lists`, `picnic_get_list`, and `picnic_get_mgm_details` tools are not available because `picnic-api` v4 removed their backing APIs.

@@ -5,6 +5,21 @@ import { resolveDeviceId } from "./device-id.js"
 
 // Singleton instance for caching
 let picnicClientInstance: InstanceType<typeof PicnicClient> | null = null
+const DEFAULT_PICNIC_AGENT = "30100;1.15.232-15154"
+
+type PicnicCountryCode = "NL" | "DE" | "FR"
+type PicnicClientOptions = NonNullable<ConstructorParameters<typeof PicnicClient>[0]> &
+  Record<string, unknown>
+
+function buildPicnicHeaders(authKey: string | null, deviceId: string): HeadersInit {
+  return {
+    "User-Agent": "okhttp/3.12.2",
+    "Content-Type": "application/json; charset=UTF-8",
+    ...(authKey && { "x-picnic-auth": authKey }),
+    "x-picnic-agent": config.PICNIC_AGENT ?? DEFAULT_PICNIC_AGENT,
+    "x-picnic-did": deviceId,
+  }
+}
 
 function isTwoFactorAuthenticationError(error: unknown): boolean {
   if (!error || typeof error !== "object") {
@@ -71,14 +86,12 @@ export async function verifyPicnic2FACode(
   const client = getPicnicClient()
   const controller = new AbortController()
   const timeout = setTimeout(() => controller.abort(), timeoutMs)
+  const deviceId = await resolveDeviceId()
 
   try {
     const response = await fetch(`${client.url}/user/2fa/verify`, {
       method: "POST",
-      headers: new Headers({
-        ...client.baseHeaders,
-        ...client.picnicHeaders,
-      }),
+      headers: new Headers(buildPicnicHeaders(client.authKey, deviceId)),
       body: JSON.stringify({ otp: code }),
       signal: controller.signal,
     })
@@ -117,7 +130,7 @@ export async function verifyPicnic2FACode(
 export async function initializePicnicClient(
   username?: string,
   password?: string,
-  countryCode?: "NL" | "DE" | "FR",
+  countryCode?: PicnicCountryCode,
   apiVersion?: string,
 ): Promise<void> {
   if (picnicClientInstance) {
@@ -132,13 +145,14 @@ export async function initializePicnicClient(
   const savedAuthKey = await loadSession()
   const deviceId = await resolveDeviceId()
 
-  const client = new PicnicClient({
-    countryCode: loginCountryCode,
+  const clientOptions: PicnicClientOptions = {
+    countryCode: loginCountryCode as PicnicClientOptions["countryCode"],
     apiVersion: apiVersion || config.PICNIC_API_VERSION,
     authKey: savedAuthKey ?? undefined,
     deviceId,
     agent: config.PICNIC_AGENT,
-  })
+  }
+  const client = new PicnicClient(clientOptions)
 
   if (savedAuthKey) {
     try {
