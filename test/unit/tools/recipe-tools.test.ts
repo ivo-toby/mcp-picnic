@@ -145,6 +145,21 @@ describe("picnic_get_recipes", () => {
     expect(mockClient.app.getPage).toHaveBeenCalledWith("recipe-cattree-jamie-oliver")
   })
 
+  it("falls back to the dash-form page id when a bare category's underscore page is missing", async () => {
+    mockClient.app.getPage
+      .mockRejectedValueOnce(new Error("page-template not found"))
+      .mockResolvedValueOnce(pageWithRecipes([]))
+
+    const result = await toolRegistry.executeTool("picnic_get_recipes", {
+      category: "jamie-oliver",
+    })
+    const payload = JSON.parse(result.content[0].text!)
+
+    expect(mockClient.app.getPage).toHaveBeenNthCalledWith(1, "recipe_cattree_jamie-oliver")
+    expect(mockClient.app.getPage).toHaveBeenNthCalledWith(2, "recipe-cattree-jamie-oliver")
+    expect(payload.pageId).toBe("recipe-cattree-jamie-oliver")
+  })
+
   it("extracts cookbook recipes with title, time, tagline and image", async () => {
     mockClient.app.getPage.mockResolvedValueOnce(
       pageWithRecipes([
@@ -1182,5 +1197,17 @@ describe("picnic_save_recipe / picnic_unsave_recipe", () => {
       message: "Recipe unsaved",
       recipeId: "abc",
     })
+  })
+
+  it("rejects empty recipe IDs before save or unsave calls Picnic", async () => {
+    await expect(toolRegistry.executeTool("picnic_save_recipe", { recipeId: "" })).rejects.toThrow(
+      /Invalid input/,
+    )
+    await expect(
+      toolRegistry.executeTool("picnic_unsave_recipe", { recipeId: "" }),
+    ).rejects.toThrow(/Invalid input/)
+
+    expect(mockClient.recipe.saveRecipe).not.toHaveBeenCalled()
+    expect(mockClient.recipe.unsaveRecipe).not.toHaveBeenCalled()
   })
 })

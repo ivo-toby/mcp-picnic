@@ -892,15 +892,29 @@ toolRegistry.register({
     // so we don't try to canonicalise — we pass through what the caller sent
     // when it already contains the prefix.
     let pageId: string
+    let bareCategoryId: string | undefined
     if (args.category) {
       pageId = /^recipe[_-]cattree[_-]/i.test(args.category)
         ? args.category
         : `recipe_cattree_${args.category}`
+      if (pageId !== args.category) bareCategoryId = args.category
     } else {
       pageId = "cookbook-page-content"
     }
 
-    const page = await client.app.getPage(pageId)
+    let page: unknown
+    try {
+      page = await client.app.getPage(pageId)
+    } catch (error) {
+      if (!bareCategoryId) throw error
+      const fallbackPageId = `recipe-cattree-${bareCategoryId}`
+      try {
+        page = await client.app.getPage(fallbackPageId)
+        pageId = fallbackPageId
+      } catch {
+        throw error
+      }
+    }
 
     if (args.full) {
       // Return compact JSON: the registry pretty-prints objects with 2-space
@@ -1410,7 +1424,7 @@ toolRegistry.register({
 
 // Save recipe tool
 const saveRecipeInputSchema = z.object({
-  recipeId: z.string().describe("The ID of the recipe to save"),
+  recipeId: z.string().min(1).describe("The ID of the recipe to save"),
 })
 
 toolRegistry.register({
@@ -1430,7 +1444,7 @@ toolRegistry.register({
 
 // Unsave recipe tool
 const unsaveRecipeInputSchema = z.object({
-  recipeId: z.string().describe("The ID of the recipe to unsave"),
+  recipeId: z.string().min(1).describe("The ID of the recipe to unsave"),
 })
 
 toolRegistry.register({
