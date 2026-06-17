@@ -10,6 +10,7 @@ import { createMCPServer } from "../../../src/utils/server-factory"
 vi.mock("../../../src/utils/server-factory")
 vi.mock("crypto", () => ({
   randomUUID: vi.fn(() => "test-session-id"),
+  timingSafeEqual: vi.fn((a: Buffer, b: Buffer) => Buffer.compare(a, b) === 0),
 }))
 
 const mockTransport = {
@@ -221,5 +222,223 @@ describe("StreamableHttpServer", () => {
 
     // We get a response (not 404), meaning the /mcp route exists
     expect(res.statusCode).not.toBe(404)
+  })
+
+  it("should require authentication when authToken is configured", async () => {
+    vi.useRealTimers()
+    server = new StreamableHttpServer({ port: 0, enableRequestLogging: false, authToken: "secret" })
+    await server.start()
+
+    // @ts-expect-error - private property access
+    const httpServer = server.server as http.Server
+    const address = httpServer.address() as { port: number }
+
+    const res = await new Promise<{ statusCode: number; body: any }>((resolve, reject) => {
+      const req = http.request(
+        { hostname: "127.0.0.1", port: address.port, path: "/sessions", method: "GET" },
+        (response) => {
+          let data = ""
+          response.on("data", (chunk: string) => (data += chunk))
+          response.on("end", () => {
+            resolve({ statusCode: response.statusCode!, body: JSON.parse(data) })
+          })
+        },
+      )
+      req.on("error", reject)
+      req.end()
+    })
+
+    expect(res.statusCode).toBe(401)
+    expect(res.body).toEqual(
+      expect.objectContaining({
+        error: "Unauthorized",
+      }),
+    )
+  })
+
+  it("should require auth for /mcp POST when authToken is configured", async () => {
+    vi.useRealTimers()
+    server = new StreamableHttpServer({ port: 0, enableRequestLogging: false, authToken: "secret" })
+    await server.start()
+
+    // @ts-expect-error - private property access
+    const httpServer = server.server as http.Server
+    const address = httpServer.address() as { port: number }
+
+    const mcpRes = await new Promise<{ statusCode: number }>((resolve, reject) => {
+      const req = http.request(
+        {
+          hostname: "127.0.0.1",
+          port: address.port,
+          path: "/mcp",
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+        },
+        (response) => {
+          response.on("data", () => {})
+          response.on("end", () => {
+            resolve({ statusCode: response.statusCode! })
+          })
+        },
+      )
+      req.on("error", reject)
+      req.write("{}")
+      req.end()
+    })
+
+    const healthRes = await new Promise<{ statusCode: number }>((resolve, reject) => {
+      const req = http.request(
+        { hostname: "127.0.0.1", port: address.port, path: "/health", method: "GET" },
+        (response) => {
+          response.on("data", () => {})
+          response.on("end", () => {
+            resolve({ statusCode: response.statusCode! })
+          })
+        },
+      )
+      req.on("error", reject)
+      req.end()
+    })
+
+    expect(mcpRes.statusCode).toBe(401)
+    expect(healthRes.statusCode).toBe(200)
+  })
+
+  it("should reject wrong auth header token", async () => {
+    vi.useRealTimers()
+    server = new StreamableHttpServer({
+      port: 0,
+      enableRequestLogging: false,
+      authToken: "secret",
+      authHeaderName: "x-api-token",
+    })
+    await server.start()
+
+    // @ts-expect-error - private property access
+    const httpServer = server.server as http.Server
+    const address = httpServer.address() as { port: number }
+
+    const sessionsRes = await new Promise<{ statusCode: number }>((resolve, reject) => {
+      const req = http.request(
+        {
+          hostname: "127.0.0.1",
+          port: address.port,
+          path: "/sessions",
+          method: "GET",
+          headers: { "x-api-token": "wrong" },
+        },
+        (response) => {
+          response.on("data", () => {})
+          response.on("end", () => {
+            resolve({ statusCode: response.statusCode! })
+          })
+        },
+      )
+      req.on("error", reject)
+      req.end()
+    })
+
+    expect(sessionsRes.statusCode).toBe(401)
+  })
+
+  it("should allow custom header token authentication", async () => {
+    vi.useRealTimers()
+    server = new StreamableHttpServer({
+      port: 0,
+      enableRequestLogging: false,
+      authToken: "secret",
+      authHeaderName: "x-api-token",
+    })
+    await server.start()
+
+    // @ts-expect-error - private property access
+    const httpServer = server.server as http.Server
+    const address = httpServer.address() as { port: number }
+
+    const sessionsRes = await new Promise<{ statusCode: number }>((resolve, reject) => {
+      const req = http.request(
+        {
+          hostname: "127.0.0.1",
+          port: address.port,
+          path: "/sessions",
+          method: "GET",
+          headers: { "x-api-token": "secret" },
+        },
+        (response) => {
+          response.on("data", () => {})
+          response.on("end", () => {
+            resolve({ statusCode: response.statusCode! })
+          })
+        },
+      )
+      req.on("error", reject)
+      req.end()
+    })
+
+    expect(sessionsRes.statusCode).toBe(200)
+  })
+
+  it("should allow authorization bearer token authentication", async () => {
+    vi.useRealTimers()
+    server = new StreamableHttpServer({ port: 0, enableRequestLogging: false, authToken: "secret" })
+    await server.start()
+
+    // @ts-expect-error - private property access
+    const httpServer = server.server as http.Server
+    const address = httpServer.address() as { port: number }
+
+    const sessionsRes = await new Promise<{ statusCode: number }>((resolve, reject) => {
+      const req = http.request(
+        {
+          hostname: "127.0.0.1",
+          port: address.port,
+          path: "/sessions",
+          method: "GET",
+          headers: { Authorization: "Bearer secret" },
+        },
+        (response) => {
+          response.on("data", () => {})
+          response.on("end", () => {
+            resolve({ statusCode: response.statusCode! })
+          })
+        },
+      )
+      req.on("error", reject)
+      req.end()
+    })
+
+    expect(sessionsRes.statusCode).toBe(200)
+  })
+
+  it("should not recurse when transport close fires onclose during session cleanup", () => {
+    server = new StreamableHttpServer({ enableRequestLogging: false })
+    const sessionId = "regression-session"
+
+    const transport: {
+      sessionId: string
+      closeCalls: number
+      onclose?: () => void
+      close: () => void
+    } = {
+      sessionId,
+      closeCalls: 0,
+      close() {
+        this.closeCalls++
+        this.onclose?.()
+      },
+    }
+
+    transport.onclose = () => {
+      if (transport.sessionId) {
+        server.cleanupSession(transport.sessionId)
+      }
+    }
+
+    // @ts-expect-error - private property access
+    server.transports[sessionId] = transport
+
+    expect(() => server.cleanupSession(sessionId)).not.toThrow()
+    expect(transport.closeCalls).toBe(1)
+    expect(server.getActiveSessions()).toEqual([])
   })
 })

@@ -88,7 +88,7 @@ Add this configuration:
 
 3. **Restart Claude Desktop** completely
 
-4. **Complete 2FA** (if enabled on your account) - on your first conversation, ask the assistant to verify your account. It will send you a code via SMS and prompt you to enter it. See the [Authentication](#authentication) section for details.
+4. **Complete 2FA** (if enabled on your account) - ask your MCP client/assistant to call the `picnic_generate_2fa_code` tool, then provide the received code so it can call `picnic_verify_2fa_code`. See the [Authentication](#authentication) section for details.
 
 5. **Start using it** - you should see a 🔨 hammer icon in the input area:
 
@@ -131,10 +131,10 @@ Here are some practical scenarios where MCP Picnic can transform your grocery sh
 User: "Show me some quick weeknight recipes from Picnic and pick a chicken one"
 
 AI Actions:
-1. Uses picnic_get_recipes (no category) to list cookbook highlights and the 47 available categories
-2. Uses picnic_get_recipes with category="20minuten" to fetch all recipes in the 20-minute category
-3. Picks one with chicken from the title and uses picnic_get_recipe_details for the recipe id
-4. Reads back the ingredients list, the "uit eigen keuken" pantry items, the cooking steps and the variation tip
+1. Uses picnic_browse_recipes (no category) to list cookbook highlights and available category page IDs
+2. Uses picnic_browse_recipes with category="20minuten" to fetch all recipes in the 20-minute category
+3. Picks one with chicken from the title and uses picnic_get_recipe for the recipe id
+4. Reads back the ingredients list, pantry items, cooking steps and recipe tips
 5. Optionally uses picnic_save_recipe to save it for later
 ```
 
@@ -163,7 +163,7 @@ User: "I want to make lasagna but need gluten-free and dairy-free alternatives"
 AI Actions:
 1. Uses picnic_search to find gluten-free pasta
 2. Uses picnic_get_suggestions for dairy-free cheese alternatives
-3. Uses picnic_get_article to check ingredient details
+3. Uses picnic_get_product_details to check ingredient details
 4. Uses picnic_add_to_cart to add suitable products
 5. Provides cooking tips and substitution ratios
 ```
@@ -192,7 +192,7 @@ User: "I have €50 for groceries this week, help me maximize value"
 
 AI Actions:
 1. Uses picnic_search to find budget-friendly staples
-2. Uses picnic_get_categories to explore discount sections
+2. Uses picnic_get_product_details to inspect prices, package sizes, and promotions
 3. Uses picnic_get_cart to track running total
 4. Uses picnic_remove_from_cart if budget exceeded
 5. Uses picnic_get_wallet_transactions to track spending patterns
@@ -206,11 +206,11 @@ AI Actions:
 User: "Create separate shopping lists for weekly groceries and party supplies"
 
 AI Actions:
-1. Uses picnic_get_lists to view existing lists
-2. Uses picnic_get_list to check current items
-3. Uses picnic_search to find party-specific items
-4. Organizes items by category using picnic_get_categories
-5. Uses picnic_add_to_cart when ready to order
+1. Uses picnic_search to find weekly grocery staples
+2. Uses picnic_search to find party-specific items
+3. Uses picnic_get_product_details to check pack sizes and ingredients
+4. Uses picnic_add_to_cart when ready to order
+5. Uses picnic_get_cart to review totals before checkout
 ```
 
 ### 🎉 **Event Planning**
@@ -225,7 +225,7 @@ AI Actions:
 2. Uses picnic_get_suggestions for wine pairings
 3. Uses picnic_get_delivery_slots to schedule Friday delivery
 4. Uses picnic_set_delivery_slot to book optimal time
-5. Uses picnic_get_article to check product availability and sizes
+5. Uses picnic_get_product_details to check product availability and sizes
 ```
 
 ### 🥗 **Health & Dietary Management**
@@ -237,7 +237,7 @@ User: "Find low-carb options for a diabetic-friendly weekly menu"
 
 AI Actions:
 1. Uses picnic_search with specific dietary keywords
-2. Uses picnic_get_article to check nutritional information
+2. Uses picnic_get_product_details to check nutritional information
 3. Uses picnic_get_suggestions for healthy alternatives
 4. Uses picnic_add_to_cart for approved items only
 5. Tracks nutritional goals across multiple meals
@@ -267,9 +267,9 @@ User: "Compare prices for organic vs conventional produce this week"
 
 AI Actions:
 1. Uses picnic_search for both organic and conventional items
-2. Uses picnic_get_article to compare prices and sizes
-3. Uses picnic_get_categories to explore different brands
-4. Uses picnic_get_suggestions for similar products
+2. Uses picnic_get_product_details to compare prices and sizes
+3. Uses picnic_get_suggestions for similar brands and products
+4. Uses picnic_get_cart to compare basket totals
 5. Provides detailed cost analysis and recommendations
 ```
 
@@ -285,7 +285,7 @@ AI Actions:
 2. Uses picnic_get_delivery_scenario for driver communication
 3. Uses picnic_rate_delivery after completion
 4. Uses picnic_send_delivery_invoice_email for records
-5. Uses picnic_get_mgm_details to share referral benefits
+5. Uses picnic_get_order_status to confirm final order state
 ```
 
 ### 💳 **Financial Tracking**
@@ -334,6 +334,30 @@ npm run build
 npm link
 ```
 
+### Option 3: Docker / Docker Compose
+
+```bash
+# 1) Create .env with your Picnic credentials
+cat > .env <<EOF
+PICNIC_USERNAME=your-picnic-email@example.com
+PICNIC_PASSWORD=your-picnic-password
+PICNIC_COUNTRY_CODE=NL
+EOF
+
+# 2) Build and start
+docker compose up -d --build
+
+# 3) Check health
+docker compose ps
+curl http://localhost:3000/health
+```
+
+Notes:
+- The container runs as a non-root user (UID `1638`).
+- Session persistence is configured via volume `picnic-data` mapped to `/app/data`.
+- `PICNIC_SESSION_FILE` defaults to `/app/data/picnic-session.json` in the container.
+- `PICNIC_DEVICE_FILE` defaults to `/app/data/picnic-device.json` in the container, so a generated device id is persisted on the same volume and reused across restarts.
+
 ### Configuration
 
 The server supports both stdio and HTTP transports:
@@ -367,10 +391,25 @@ PICNIC_COUNTRY_CODE=NL
 # HTTP Transport settings (optional)
 ENABLE_HTTP_SERVER=true
 HTTP_PORT=3000
-HTTP_HOST=localhost
+# Default is localhost. Use 0.0.0.0 for Docker/external access.
+HTTP_HOST=0.0.0.0
+# Optional: protect HTTP endpoints with a shared token
+HTTP_AUTH_TOKEN=replace-with-a-long-random-token
+# Optional: HTTP header name to accept token auth (default: x-mcp-token)
+HTTP_AUTH_HEADER_NAME=x-mcp-token
+
+# Session persistence (optional, strongly recommended in containers)
+PICNIC_SESSION_FILE=~/.picnic-session.json
 
 # Picnic API settings (optional)
 PICNIC_API_VERSION=15
+
+# Device identity sent to the Picnic API (optional)
+# Defaults are provided by the picnic-api library; override these only if
+# Picnic starts rejecting requests (e.g. 2FA codes not arriving) before the
+# library ships updated defaults.
+PICNIC_DEVICE_ID=3C417201548B2E3B
+PICNIC_AGENT="30100;1.228.1-15480;"
 ```
 
 #### Country Configuration
@@ -390,10 +429,26 @@ The `PICNIC_COUNTRY_CODE` setting determines which Picnic regional API to connec
 
 **Example for German accounts:**
 ```bash
-PICNIC_USERNAME=ihre-email@example.com
-PICNIC_PASSWORD=ihr-passwort
+PICNIC_USERNAME=your-email@example.com
+PICNIC_PASSWORD=your-password
 PICNIC_COUNTRY_CODE=DE
 ```
+
+#### HTTP Token Authentication
+
+When `HTTP_AUTH_TOKEN` is set, all HTTP endpoints except `/health` require authentication. You can authenticate with either:
+
+- Custom HTTP header token: `<HTTP_AUTH_HEADER_NAME>: YOUR_TOKEN` (defaults to `x-mcp-token`)
+- Authorization header bearer token: `Authorization: Bearer YOUR_TOKEN`
+
+Example requests:
+
+```bash
+curl -H "x-mcp-token: YOUR_TOKEN" "http://localhost:3000/mcp"
+curl -H "Authorization: Bearer YOUR_TOKEN" "http://localhost:3000/sessions"
+```
+
+If the token is missing or invalid, the server responds with `401 Unauthorized`.
 
 ### MCP Client Configuration
 
@@ -468,26 +523,21 @@ The server uses the credentials configured in your environment variables:
 
 ### Two-Factor Authentication (2FA)
 
-If your Picnic account has 2FA enabled, you need to complete the verification flow before you can use any shopping tools. On your first conversation after starting the server, ask the AI assistant to:
+If your Picnic account has 2FA enabled, complete the verification flow using MCP tools:
 
-1. **Generate a 2FA code**: The assistant will call `picnic_generate_2fa_code` to send a verification code to your phone via SMS
-2. **Enter the code**: Tell the assistant the code you received, and it will call `picnic_verify_2fa_code` to complete authentication
+1. Call `picnic_generate_2fa_code` to send a verification code (usually SMS).
+2. Call `picnic_verify_2fa_code` with the received OTP code.
 
-Once 2FA is verified, your session is saved and you won't need to repeat this step until the session expires.
+> Important: In Docker, the server itself cannot "chat" or type the code for you. Your MCP client (Claude Desktop, Continue, etc.) must trigger these tools.
 
-**Example**:
-```
-User: "I need to verify my Picnic account"
-AI: I'll generate a 2FA code for you... A code has been sent to your phone via SMS.
-User: "The code is 123456"
-AI: Your 2FA code has been verified. You're now fully authenticated and can start shopping!
-```
+To avoid repeated 2FA challenges and container restart loops, persist `PICNIC_SESSION_FILE` to a Docker volume.
+When 2FA is pending, the server stays up so your client can complete `picnic_generate_2fa_code` and `picnic_verify_2fa_code`.
 
-**Security Note**: Your credentials are only used to authenticate with Picnic's API. The session token is stored locally at `~/.picnic-session.json`. Your password is never stored on disk.
+**Security Note**: Credentials are used only for Picnic API authentication. The session token is stored locally at `PICNIC_SESSION_FILE`; the password is never stored on disk.
 
 ## Available Tools
 
-The server provides comprehensive access to Picnic's functionality through 25+ specialized tools:
+The server provides comprehensive access to Picnic's functionality through 30+ specialized tools:
 
 ### Authentication & Account Management
 
@@ -502,9 +552,25 @@ The server provides comprehensive access to Picnic's functionality through 25+ s
 
 - **`picnic_search`** - Search for products by name or keywords
 - **`picnic_get_suggestions`** - Get product suggestions based on query
-- **`picnic_get_article`** - Get detailed information about a specific product
+- **`picnic_get_product_details`** - Get detailed information about a specific product
 - **`picnic_get_image`** - Get product images in various sizes (tiny to extra-large)
-- **`picnic_get_categories`** - Browse product categories with configurable depth
+
+**Note**: `picnic_get_categories` is not available. The underlying `picnic-api` package removed `getCategories()` in v4; category browsing would need a new Fusion page implementation.
+
+### Recipe & Meal Planning
+
+- **`picnic_browse_recipes`** - Browse Picnic recipes, including category page IDs and category-specific listings
+- **`picnic_get_recipe`** - Get details for a specific recipe
+- **`picnic_get_recipe_ingredients`** - Extract recipe ingredients
+- **`picnic_get_multiple_recipe_ingredients`** - Extract ingredients from multiple recipes
+- **`picnic_build_shopping_list`** - Build a consolidated shopping list
+- **`picnic_find_meal_combinations`** - Find meal combinations within constraints
+- **`picnic_add_recipe_to_cart`** - Add recipe ingredients to the cart
+- **`picnic_remove_recipe_from_cart`** - Remove recipe ingredients from the cart
+- **`picnic_get_saved_recipes`** - Get saved recipes
+- **`picnic_get_own_recipes`** - Get user-created recipes
+- **`picnic_save_recipe`** - Save a recipe
+- **`picnic_unsave_recipe`** - Remove a saved recipe
 
 ### Shopping Cart Management
 
@@ -526,24 +592,11 @@ The server provides comprehensive access to Picnic's functionality through 25+ s
 - **`picnic_send_delivery_invoice_email`** - Send/resend delivery invoice emails
 - **`picnic_get_order_status`** - Check status of specific orders
 
-### Lists & Organization
-
-- **`picnic_get_lists`** - Get shopping lists and sublists with configurable depth
-- **`picnic_get_list`** - Get specific list or sublist with all items
-
 ### Payment & Financial
 
 - **`picnic_get_payment_profile`** - View payment methods and billing information
 - **`picnic_get_wallet_transactions`** - Get wallet transaction history (paginated)
 - **`picnic_get_wallet_transaction_details`** - Get detailed transaction information
-- **`picnic_get_mgm_details`** - Get MGM (friends discount) program details
-
-### Recipes
-
-- **`picnic_get_recipes`** - Browse the cookbook (~30 highlighted recipes plus 47 categories) or fetch a specific category by id
-- **`picnic_get_recipe_details`** - Structured recipe details: ingredients, "uit eigen keuken" pantry items, suggested complementary products, cooking steps, and the variation tip
-- **`picnic_save_recipe`** - Save a recipe to the user's saved recipes list
-- **`picnic_unsave_recipe`** - Remove a recipe from the user's saved recipes list
 
 ## Development
 
@@ -756,10 +809,10 @@ Hier zijn enkele praktische scenario's waarin MCP Picnic je boodschappen-ervarin
 Gebruiker: "Laat me snelle doordeweekse recepten zien van Picnic en kies een kiprecept"
 
 AI Acties:
-1. Gebruikt picnic_get_recipes (zonder categorie) om de kookboek-highlights en 47 categorieën op te halen
-2. Gebruikt picnic_get_recipes met category="20minuten" om alle recepten in die categorie te tonen
-3. Kiest er een met kip in de titel en gebruikt picnic_get_recipe_details met het recipe id
-4. Geeft de ingrediëntenlijst, de "uit eigen keuken"-spullen, de bereidingsstappen en de variatietip terug
+1. Gebruikt picnic_browse_recipes (zonder categorie) om de kookboek-highlights en beschikbare categoriepagina's op te halen
+2. Gebruikt picnic_browse_recipes met category="20minuten" om alle recepten in die categorie te tonen
+3. Kiest er een met kip in de titel en gebruikt picnic_get_recipe met het recipe id
+4. Geeft de ingrediëntenlijst, voorraadkast-spullen, bereidingsstappen en recepttips terug
 5. Slaat het recept eventueel op met picnic_save_recipe
 ```
 
@@ -788,7 +841,7 @@ Gebruiker: "Ik wil lasagne maken maar heb glutenvrije en zuivelvrije alternatiev
 AI Acties:
 1. Gebruikt picnic_search om glutenvrije pasta te vinden
 2. Gebruikt picnic_get_suggestions voor zuivelvrije kaas alternatieven
-3. Gebruikt picnic_get_article om ingrediënt details te controleren
+3. Gebruikt picnic_get_product_details om ingrediënt details te controleren
 4. Gebruikt picnic_add_to_cart om geschikte producten toe te voegen
 5. Geeft kooktips en vervangingsverhoudingen
 ```
@@ -817,7 +870,7 @@ Gebruiker: "Ik heb €50 voor boodschappen deze week, help me de waarde te maxim
 
 AI Acties:
 1. Gebruikt picnic_search om budget-vriendelijke basisproducten te vinden
-2. Gebruikt picnic_get_categories om kortingssecties te verkennen
+2. Gebruikt picnic_get_product_details om prijzen, verpakkingsmaten en promoties te controleren
 3. Gebruikt picnic_get_cart om lopend totaal bij te houden
 4. Gebruikt picnic_remove_from_cart als budget overschreden wordt
 5. Gebruikt picnic_get_wallet_transactions om uitgavenpatronen te volgen
@@ -831,11 +884,11 @@ AI Acties:
 Gebruiker: "Maak aparte boodschappenlijsten voor wekelijkse boodschappen en feestbenodigdheden"
 
 AI Acties:
-1. Gebruikt picnic_get_lists om bestaande lijsten te bekijken
-2. Gebruikt picnic_get_list om huidige items te controleren
-3. Gebruikt picnic_search om feest-specifieke items te vinden
-4. Organiseert items per categorie met picnic_get_categories
-5. Gebruikt picnic_add_to_cart wanneer klaar om te bestellen
+1. Gebruikt picnic_search om wekelijkse basisboodschappen te vinden
+2. Gebruikt picnic_search om feest-specifieke items te vinden
+3. Gebruikt picnic_get_product_details om verpakkingsmaten en ingrediënten te controleren
+4. Gebruikt picnic_add_to_cart wanneer klaar om te bestellen
+5. Gebruikt picnic_get_cart om totalen voor het afrekenen te controleren
 ```
 
 ### 🎉 **Evenement Planning**
@@ -850,7 +903,7 @@ AI Acties:
 2. Gebruikt picnic_get_suggestions voor wijn combinaties
 3. Gebruikt picnic_get_delivery_slots om vrijdag bezorging in te plannen
 4. Gebruikt picnic_set_delivery_slot om optimale tijd te boeken
-5. Gebruikt picnic_get_article om product beschikbaarheid en maten te controleren
+5. Gebruikt picnic_get_product_details om product beschikbaarheid en maten te controleren
 ```
 
 ### 🥗 **Gezondheid & Dieet Beheer**
@@ -862,7 +915,7 @@ Gebruiker: "Vind koolhydraatarme opties voor een diabetesvriendelijk weekmenu"
 
 AI Acties:
 1. Gebruikt picnic_search met specifieke dieet zoekwoorden
-2. Gebruikt picnic_get_article om voedingswaarde informatie te controleren
+2. Gebruikt picnic_get_product_details om voedingswaarde informatie te controleren
 3. Gebruikt picnic_get_suggestions voor gezonde alternatieven
 4. Gebruikt picnic_add_to_cart alleen voor goedgekeurde items
 5. Volgt voedingsdoelen over meerdere maaltijden
@@ -892,9 +945,9 @@ Gebruiker: "Vergelijk prijzen voor biologische vs conventionele groenten deze we
 
 AI Acties:
 1. Gebruikt picnic_search voor zowel biologische als conventionele items
-2. Gebruikt picnic_get_article om prijzen en maten te vergelijken
-3. Gebruikt picnic_get_categories om verschillende merken te verkennen
-4. Gebruikt picnic_get_suggestions voor vergelijkbare producten
+2. Gebruikt picnic_get_product_details om prijzen en maten te vergelijken
+3. Gebruikt picnic_get_suggestions voor vergelijkbare merken en producten
+4. Gebruikt picnic_get_cart om mandtotalen te vergelijken
 5. Geeft gedetailleerde kostenanalyse en aanbevelingen
 ```
 
@@ -910,7 +963,7 @@ AI Acties:
 2. Gebruikt picnic_get_delivery_scenario voor chauffeur communicatie
 3. Gebruikt picnic_rate_delivery na voltooiing
 4. Gebruikt picnic_send_delivery_invoice_email voor administratie
-5. Gebruikt picnic_get_mgm_details om doorverwijsvoordelen te delen
+5. Gebruikt picnic_get_order_status om de uiteindelijke bestelstatus te bevestigen
 ```
 
 ### 💳 **Financiële Tracking**
@@ -1090,10 +1143,10 @@ Hier sind einige praktische Szenarien, in denen MCP Picnic Ihr Lebensmitteleinka
 Benutzer: "Zeig mir schnelle Wochentagsrezepte von Picnic und such ein Hähnchengericht aus"
 
 KI-Aktionen:
-1. Verwendet picnic_get_recipes (ohne Kategorie) für die Kochbuch-Highlights und 47 verfügbaren Kategorien
-2. Verwendet picnic_get_recipes mit category="20minuten" für alle Rezepte dieser Kategorie
-3. Wählt ein Rezept mit Hähnchen im Titel und verwendet picnic_get_recipe_details mit der recipe id
-4. Liest Zutatenliste, Vorratsgegenstände ("uit eigen keuken"), Kochschritte und den Variations-Tipp
+1. Verwendet picnic_browse_recipes (ohne Kategorie) für die Kochbuch-Highlights und verfügbaren Kategorie-Seiten
+2. Verwendet picnic_browse_recipes mit category="20minuten" für alle Rezepte dieser Kategorie
+3. Wählt ein Rezept mit Hähnchen im Titel und verwendet picnic_get_recipe mit der recipe id
+4. Liest Zutatenliste, Vorratsgegenstände, Kochschritte und Rezepttipps
 5. Speichert das Rezept optional mit picnic_save_recipe
 ```
 
@@ -1122,7 +1175,7 @@ Benutzer: "Ich möchte Lasagne machen, brauche aber glutenfreie und milchfreie A
 KI-Aktionen:
 1. Verwendet picnic_search um glutenfreie Pasta zu finden
 2. Verwendet picnic_get_suggestions für milchfreie Käse-Alternativen
-3. Verwendet picnic_get_article um Zutatdetails zu prüfen
+3. Verwendet picnic_get_product_details um Zutatdetails zu prüfen
 4. Verwendet picnic_add_to_cart um geeignete Produkte hinzuzufügen
 5. Gibt Kochtipps und Ersatzverhältnisse
 ```
@@ -1151,7 +1204,7 @@ Benutzer: "Ich habe €50 für Lebensmittel diese Woche, hilf mir den Wert zu ma
 
 KI-Aktionen:
 1. Verwendet picnic_search um budgetfreundliche Grundnahrungsmittel zu finden
-2. Verwendet picnic_get_categories um Rabattbereiche zu erkunden
+2. Verwendet picnic_get_product_details um Preise, Packungsgrößen und Aktionen zu prüfen
 3. Verwendet picnic_get_cart um laufende Gesamtsumme zu verfolgen
 4. Verwendet picnic_remove_from_cart wenn Budget überschritten wird
 5. Verwendet picnic_get_wallet_transactions um Ausgabenmuster zu verfolgen
@@ -1165,11 +1218,11 @@ KI-Aktionen:
 Benutzer: "Erstelle separate Einkaufslisten für wöchentliche Lebensmittel und Partybedarf"
 
 KI-Aktionen:
-1. Verwendet picnic_get_lists um bestehende Listen anzuzeigen
-2. Verwendet picnic_get_list um aktuelle Artikel zu überprüfen
-3. Verwendet picnic_search um party-spezifische Artikel zu finden
-4. Organisiert Artikel nach Kategorien mit picnic_get_categories
-5. Verwendet picnic_add_to_cart wenn bereit zum Bestellen
+1. Verwendet picnic_search um wöchentliche Grundnahrungsmittel zu finden
+2. Verwendet picnic_search um party-spezifische Artikel zu finden
+3. Verwendet picnic_get_product_details um Packungsgrößen und Zutaten zu prüfen
+4. Verwendet picnic_add_to_cart wenn bereit zum Bestellen
+5. Verwendet picnic_get_cart um Gesamtsummen vor dem Checkout zu prüfen
 ```
 
 ### 🎉 **Veranstaltungsplanung**
@@ -1184,7 +1237,7 @@ KI-Aktionen:
 2. Verwendet picnic_get_suggestions für Weinpaarungen
 3. Verwendet picnic_get_delivery_slots um Freitag-Lieferung zu planen
 4. Verwendet picnic_set_delivery_slot um optimale Zeit zu buchen
-5. Verwendet picnic_get_article um Produktverfügbarkeit und Größen zu prüfen
+5. Verwendet picnic_get_product_details um Produktverfügbarkeit und Größen zu prüfen
 ```
 
 ### 🥗 **Gesundheits- & Diätmanagement**
@@ -1196,7 +1249,7 @@ Benutzer: "Finde kohlenhydratarme Optionen für ein diabetikerfreundliches Woche
 
 KI-Aktionen:
 1. Verwendet picnic_search mit spezifischen Diät-Suchbegriffen
-2. Verwendet picnic_get_article um Nährwertinformationen zu prüfen
+2. Verwendet picnic_get_product_details um Nährwertinformationen zu prüfen
 3. Verwendet picnic_get_suggestions für gesunde Alternativen
 4. Verwendet picnic_add_to_cart nur für genehmigte Artikel
 5. Verfolgt Ernährungsziele über mehrere Mahlzeiten
@@ -1226,9 +1279,9 @@ Benutzer: "Vergleiche Preise für Bio- vs. konventionelles Gemüse diese Woche"
 
 KI-Aktionen:
 1. Verwendet picnic_search für sowohl Bio- als auch konventionelle Artikel
-2. Verwendet picnic_get_article um Preise und Größen zu vergleichen
-3. Verwendet picnic_get_categories um verschiedene Marken zu erkunden
-4. Verwendet picnic_get_suggestions für ähnliche Produkte
+2. Verwendet picnic_get_product_details um Preise und Größen zu vergleichen
+3. Verwendet picnic_get_suggestions für ähnliche Marken und Produkte
+4. Verwendet picnic_get_cart um Warenkorbsummen zu vergleichen
 5. Bietet detaillierte Kostenanalyse und Empfehlungen
 ```
 
@@ -1244,7 +1297,7 @@ KI-Aktionen:
 2. Verwendet picnic_get_delivery_scenario für Fahrerkommunikation
 3. Verwendet picnic_rate_delivery nach Abschluss
 4. Verwendet picnic_send_delivery_invoice_email für Aufzeichnungen
-5. Verwendet picnic_get_mgm_details um Empfehlungsvorteile zu teilen
+5. Verwendet picnic_get_order_status um den endgültigen Bestellstatus zu bestätigen
 ```
 
 ### 💳 **Finanzielle Verfolgung**

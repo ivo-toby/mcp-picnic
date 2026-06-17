@@ -19,6 +19,9 @@ vi.mock("picnic-api", () => {
       auth: { login: mockLogin },
       cart: { getCart: mockGetCart },
       authKey: opts?.authKey ?? "fresh-auth-key",
+      url: "https://example.test/api/15",
+      baseHeaders: { "x-picnic-auth": opts?.authKey ?? "fresh-auth-key" },
+      picnicHeaders: { "x-picnic-agent": "agent", "x-picnic-did": "device" },
     })),
   }
 })
@@ -30,12 +33,14 @@ vi.mock("../../../src/config.js", () => ({
     PICNIC_PASSWORD: "test-pass",
     PICNIC_COUNTRY_CODE: "NL",
     PICNIC_SESSION_FILE: "picnic-session.json",
+    PICNIC_DEVICE_FILE: "picnic-device.json",
   },
 }))
 
 describe("picnic-client session persistence", () => {
   beforeEach(async () => {
     vi.clearAllMocks()
+    vi.unstubAllGlobals()
     // Reset the module to clear the singleton between tests
     vi.resetModules()
   })
@@ -97,6 +102,50 @@ describe("picnic-client session persistence", () => {
       )
     })
 
+    it("should keep running when login throws a 2FA/MFA challenge error", async () => {
+      vi.mocked(fs.readFile).mockRejectedValue(new Error("ENOENT"))
+      mockLogin.mockRejectedValue(new Error("MFA is required for this account"))
+
+      const { initializePicnicClient, getPicnicClient } = await importClient()
+
+      await expect(initializePicnicClient()).resolves.toBeUndefined()
+      expect(() => getPicnicClient()).not.toThrow()
+      // The device-id resolver may persist a generated id, but no session
+      // should be written while 2FA is still pending.
+      expect(fs.writeFile).not.toHaveBeenCalledWith(
+        "picnic-session.json",
+        expect.anything(),
+      )
+    })
+
+    it("should keep running when login throws a TOTP wording variant", async () => {
+      vi.mocked(fs.readFile).mockRejectedValue(new Error("ENOENT"))
+      mockLogin.mockRejectedValue(new Error("TOTP verification required"))
+
+      const { initializePicnicClient, getPicnicClient } = await importClient()
+
+      await expect(initializePicnicClient()).resolves.toBeUndefined()
+      expect(() => getPicnicClient()).not.toThrow()
+      expect(fs.writeFile).not.toHaveBeenCalledWith(
+        "picnic-session.json",
+        expect.anything(),
+      )
+    })
+
+    it("should keep running when login throws a structured 2FA error", async () => {
+      vi.mocked(fs.readFile).mockRejectedValue(new Error("ENOENT"))
+      mockLogin.mockRejectedValue({ second_factor_authentication_required: true })
+
+      const { initializePicnicClient, getPicnicClient } = await importClient()
+
+      await expect(initializePicnicClient()).resolves.toBeUndefined()
+      expect(() => getPicnicClient()).not.toThrow()
+      expect(fs.writeFile).not.toHaveBeenCalledWith(
+        "picnic-session.json",
+        expect.anything(),
+      )
+    })
+
     it("should not re-initialize if already initialized", async () => {
       vi.mocked(fs.readFile).mockRejectedValue(new Error("ENOENT"))
       mockLogin.mockResolvedValue(undefined)
@@ -116,6 +165,29 @@ describe("picnic-client session persistence", () => {
       await saveSession()
 
       expect(fs.writeFile).not.toHaveBeenCalled()
+    })
+  })
+
+  describe("verifyPicnic2FACode", () => {
+    it("should timeout a stalled 2FA verification request", async () => {
+      vi.mocked(fs.readFile).mockRejectedValue(new Error("ENOENT"))
+      mockLogin.mockResolvedValue(undefined)
+
+      const fetchMock = vi.fn((_url: string, init?: RequestInit) => {
+        return new Promise((_resolve, reject) => {
+          init?.signal?.addEventListener("abort", () =>
+            reject(new DOMException("Aborted", "AbortError")),
+          )
+        })
+      })
+      vi.stubGlobal("fetch", fetchMock)
+
+      const { initializePicnicClient, verifyPicnic2FACode } = await importClient()
+      await initializePicnicClient()
+
+      await expect(verifyPicnic2FACode("123456", 1)).rejects.toThrow(
+        "2FA verification timed out after 1ms",
+      )
     })
   })
 

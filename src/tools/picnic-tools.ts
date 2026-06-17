@@ -1,6 +1,23 @@
 import { z } from "zod"
 import { toolRegistry } from "./registry.js"
-import { getPicnicClient, initializePicnicClient, saveSession } from "../utils/picnic-client.js"
+import {
+  getPicnicClient,
+  initializePicnicClient,
+  saveSession,
+  verifyPicnic2FACode,
+} from "../utils/picnic-client.js"
+import {
+  resolveRecipeId,
+  parseSellingGroupRecipe,
+  parseRecipeList,
+  buildRecipeSourceUrl,
+} from "../utils/recipe-parser.js"
+import {
+  buildShoppingList,
+  findMealCombinations,
+  parseRecipeIngredients,
+} from "../utils/recipe-meal-planning.js"
+import { config } from "../config.js"
 
 /**
  * Picnic API tools optimized for LLM consumption
@@ -16,7 +33,7 @@ import { getPicnicClient, initializePicnicClient, saveSession } from "../utils/p
 async function ensureClientInitialized() {
   try {
     getPicnicClient()
-  } catch (error) {
+  } catch {
     // Client not initialized, initialize it now
     await initializePicnicClient()
   }
@@ -211,6 +228,433 @@ toolRegistry.register({
       image,
     }
   },
+})
+
+// Recipe tools
+//
+// Picnic recipes are "selling groups". Recipe detail comes from
+// /pages/selling-group-details-page?selling_group_id=<id>, and the cookbook /
+// recipe overview from /pages/cookbook-page-content. These page routes are
+// called directly via sendRequest because the picnic-api recipe.* page methods
+// target outdated ids (recipe-details-page-root) that the API answers with 404.
+
+// Base URL for recipe/product image derivatives, derived from the API URL, e.g.
+// https://storefront-prod.de.picnicinternational.com/static/images
+function recipeImageBaseUrl(client: ReturnType<typeof getPicnicClient>): string {
+  return client.url.replace(/\/api\/.*$/, "/static/images")
+}
+
+const RECIPE_CATEGORY_INPUT_RE = /^(?:recipe[_-]cattree[_-])?[a-z0-9]+(?:[a-z0-9_-]*[a-z0-9])?$/i
+const RECIPE_CATEGORY_PAGE_ID_RE = /recipe[_-]cattree[_-][a-z0-9]+(?:[a-z0-9_-]*[a-z0-9])?/gi
+const RECIPE_CATEGORY_PREFIX_RE = /^recipe[_-]cattree[_-]/i
+
+async function fetchRecipePage(client: ReturnType<typeof getPicnicClient>, pageId: string) {
+  const page = await client.sendRequest("GET", `/pages/${pageId}`, null, true)
+  return { pageId, page }
+}
+
+async function fetchRecipeListPage(client: ReturnType<typeof getPicnicClient>, category?: string) {
+  if (!category) return fetchRecipePage(client, "cookbook-page-content")
+
+  if (RECIPE_CATEGORY_PREFIX_RE.test(category)) {
+    return fetchRecipePage(client, category)
+  }
+
+  const underscorePageId = `recipe_cattree_${category}`
+  try {
+    return await fetchRecipePage(client, underscorePageId)
+  } catch (error) {
+    const dashPageId = `recipe-cattree-${category}`
+    try {
+      return await fetchRecipePage(client, dashPageId)
+    } catch {
+      throw error
+    }
+  }
+}
+
+function extractRecipeCategoryIds(page: unknown): string[] {
+  const ids = new Set<string>()
+
+  const visit = (node: unknown): void => {
+    if (typeof node === "string") {
+      for (const match of node.matchAll(RECIPE_CATEGORY_PAGE_ID_RE)) ids.add(match[0])
+      return
+    }
+    if (Array.isArray(node)) {
+      for (const child of node) visit(child)
+      return
+    }
+    if (!node || typeof node !== "object") return
+    for (const value of Object.values(node as Record<string, unknown>)) visit(value)
+  }
+
+  visit(page)
+  return [...ids]
+}
+
+async function fetchCookbookRecipes(client: ReturnType<typeof getPicnicClient>) {
+  const { page } = await fetchRecipeListPage(client)
+  return parseRecipeList(page, { imageBaseUrl: recipeImageBaseUrl(client) })
+}
+
+function paginateRecipes(all: ReturnType<typeof parseRecipeList>, offset: number, limit: number) {
+  const startIndex = offset || 0
+  const recipes = all.slice(startIndex, startIndex + limit).map((recipe) => ({
+    ...recipe,
+    sourceUrl: buildRecipeSourceUrl(config.PICNIC_COUNTRY_CODE, recipe.recipeId),
+  }))
+  return {
+    recipes,
+    pagination: {
+      offset: startIndex,
+      limit,
+      returned: recipes.length,
+      total: all.length,
+      hasMore: startIndex + limit < all.length,
+    },
+  }
+}
+
+// Get recipe tool
+const getRecipeInputSchema = z.object({
+  recipe_url_or_id: z
+    .string()
+    .min(1)
+    .describe(
+      "A Picnic recipe URL (any format) or a 24-character hex recipe ID. " +
+        "Examples: 'https://picnic.app/de/go/abc123', " +
+        "'https://picnic.app/de/rezepte/0123456789abcdef01234567/example-recipe', " +
+        "'0123456789abcdef01234567'",
+    ),
+})
+
+toolRegistry.register({
+  name: "picnic_get_recipe",
+  description:
+    "Fetch a Picnic recipe by URL or recipe ID. Returns structured recipe data: name, " +
+    "description, ingredients, preparation steps, timing, servings, image URL, saved state, " +
+    "and the canonical source URL. Accepts short share links (picnic.app/de/go/xxx), full " +
+    "recipe URLs, or bare recipe IDs.",
+  inputSchema: getRecipeInputSchema,
+  handler: async (args) => {
+    await ensureClientInitialized()
+    const client = getPicnicClient()
+    const recipeId = await resolveRecipeId(args.recipe_url_or_id)
+    const page = await client.sendRequest(
+      "GET",
+      `/pages/selling-group-details-page?selling_group_id=${encodeURIComponent(recipeId)}`,
+      null,
+      true,
+    )
+    const parsed = parseSellingGroupRecipe(page, { imageBaseUrl: recipeImageBaseUrl(client) })
+    const sourceUrl = buildRecipeSourceUrl(config.PICNIC_COUNTRY_CODE, recipeId)
+    return { recipeId, sourceUrl, ...parsed }
+  },
+})
+
+// Browse / saved recipes
+const recipeListInputSchema = z.object({
+  category: z
+    .string()
+    .regex(
+      RECIPE_CATEGORY_INPUT_RE,
+      "Use a bare recipe category ID or a full recipe_cattree/recipe-cattree page ID.",
+    )
+    .optional()
+    .describe(
+      "Recipe category ID, such as '20minuten', or full page ID, such as 'recipe-cattree-jamie-oliver'.",
+    ),
+  limit: z
+    .number()
+    .min(1)
+    .max(100)
+    .default(25)
+    .describe("Maximum number of recipes to return (1-100, default: 25)"),
+  offset: z
+    .number()
+    .min(0)
+    .default(0)
+    .describe("Number of recipes to skip for pagination (default: 0)"),
+})
+
+toolRegistry.register({
+  name: "picnic_browse_recipes",
+  description:
+    "Browse Picnic's recipe/cookbook overview or a specific recipe category. Returns a " +
+    "paginated list of recipes (id, name, image URL, cookbook section, source URL) and " +
+    "category page IDs when available. Use the recipeId with picnic_get_recipe for full details.",
+  inputSchema: recipeListInputSchema,
+  handler: async (args) => {
+    await ensureClientInitialized()
+    const client = getPicnicClient()
+    const { pageId, page } = await fetchRecipeListPage(client, args.category)
+    const all = parseRecipeList(page, { imageBaseUrl: recipeImageBaseUrl(client) })
+    const result = { pageId, ...paginateRecipes(all, args.offset ?? 0, args.limit ?? 25) }
+    const categories = extractRecipeCategoryIds(page)
+    if ((!args.category || all.length === 0) && categories.length > 0) {
+      return { ...result, categories }
+    }
+    return result
+  },
+})
+
+toolRegistry.register({
+  name: "picnic_get_saved_recipes",
+  description:
+    "List the recipes the user has saved/favourited in their Picnic cookbook (the " +
+    "'Gespeichert' tab), distinct from the public discovery feed. Returns id, name, image URL " +
+    "and source URL — useful for importing saved recipes elsewhere.",
+  inputSchema: recipeListInputSchema,
+  handler: async (args) => {
+    await ensureClientInitialized()
+    const client = getPicnicClient()
+    const all = await fetchCookbookRecipes(client)
+    const saved = all.filter((recipe) => recipe.segments.includes("SAVED_RECIPES"))
+    return paginateRecipes(saved, args.offset ?? 0, args.limit ?? 25)
+  },
+})
+
+toolRegistry.register({
+  name: "picnic_get_own_recipes",
+  description:
+    "List the user's own recipes (the cookbook 'Eigene Rezepte' tab — user-created recipes). " +
+    "Returns id, name, image URL and source URL.",
+  inputSchema: recipeListInputSchema,
+  handler: async (args) => {
+    await ensureClientInitialized()
+    const client = getPicnicClient()
+    const all = await fetchCookbookRecipes(client)
+    const own = all.filter((recipe) => recipe.segments.includes("USER_DEFINED_RECIPES"))
+    return paginateRecipes(own, args.offset ?? 0, args.limit ?? 25)
+  },
+})
+
+// Save / unsave recipe
+const recipeRefInputSchema = z.object({
+  recipe_url_or_id: z
+    .string()
+    .min(1)
+    .describe("A Picnic recipe URL (any format) or a 24-character hex recipe ID."),
+})
+
+toolRegistry.register({
+  name: "picnic_save_recipe",
+  description: "Save a recipe to the user's Picnic cookbook, by URL or recipe ID.",
+  inputSchema: recipeRefInputSchema,
+  handler: async (args) => {
+    await ensureClientInitialized()
+    const client = getPicnicClient()
+    const recipeId = await resolveRecipeId(args.recipe_url_or_id)
+    await client.sendRequest(
+      "POST",
+      "/pages/task/recipe-saving",
+      { payload: { recipe_id: recipeId, saved_at: new Date().toISOString() } },
+      true,
+    )
+    return { message: "Recipe saved", recipeId }
+  },
+})
+
+toolRegistry.register({
+  name: "picnic_unsave_recipe",
+  description: "Remove a recipe from the user's Picnic cookbook, by URL or recipe ID.",
+  inputSchema: recipeRefInputSchema,
+  handler: async (args) => {
+    await ensureClientInitialized()
+    const client = getPicnicClient()
+    const recipeId = await resolveRecipeId(args.recipe_url_or_id)
+    await client.sendRequest(
+      "POST",
+      "/pages/task/recipe-saving",
+      { payload: { recipe_id: recipeId, saved_at: null } },
+      true,
+    )
+    return { message: "Recipe removed from cookbook", recipeId }
+  },
+})
+
+// Add a recipe's ingredients to the basket by assigning the selling group.
+const addRecipeToCartInputSchema = z.object({
+  recipe_url_or_id: z
+    .string()
+    .min(1)
+    .describe("A Picnic recipe URL (any format) or a 24-character hex recipe ID."),
+  portions: z
+    .number()
+    .min(1)
+    .optional()
+    .describe("Number of portions to add (defaults to the recipe's default portions)."),
+})
+
+toolRegistry.register({
+  name: "picnic_add_recipe_to_cart",
+  description:
+    "Add a recipe's ingredients to the shopping cart by assigning the recipe (selling group) " +
+    "to the basket. Optionally set the number of portions.",
+  inputSchema: addRecipeToCartInputSchema,
+  handler: async (args) => {
+    await ensureClientInitialized()
+    const client = getPicnicClient()
+    const recipeId = await resolveRecipeId(args.recipe_url_or_id)
+    const payload: { selling_group_id: string; portions?: number } = { selling_group_id: recipeId }
+    if (args.portions !== undefined) payload.portions = args.portions
+    await client.sendRequest(
+      "POST",
+      "/pages/task/assign-selling-group-to-basket",
+      { payload },
+      true,
+    )
+    return {
+      message: "Recipe added to cart",
+      recipeId,
+      ...(args.portions !== undefined && { portions: args.portions }),
+    }
+  },
+})
+
+// Remove a recipe's ingredients from the basket (inverse of add_recipe_to_cart).
+toolRegistry.register({
+  name: "picnic_remove_recipe_from_cart",
+  description:
+    "Remove a recipe (selling group) from the basket, undoing picnic_add_recipe_to_cart. " +
+    "Removes only that recipe's ingredients, leaving the rest of the cart untouched.",
+  inputSchema: recipeRefInputSchema,
+  handler: async (args) => {
+    await ensureClientInitialized()
+    const client = getPicnicClient()
+    const recipeId = await resolveRecipeId(args.recipe_url_or_id)
+    await client.sendRequest(
+      "POST",
+      "/pages/task/remove-selling-group-from-basket",
+      { payload: { selling_group_id: recipeId } },
+      true,
+    )
+    return { message: "Recipe removed from cart", recipeId }
+  },
+})
+
+// Recipe meal-planning tools
+const recipeIngredientsInputSchema = z.object({
+  recipe_url_or_id: z
+    .string()
+    .min(1)
+    .describe("A Picnic recipe URL (any format) or a 24- or 32-character hex recipe ID."),
+})
+
+async function fetchRecipeIngredientsByRef(
+  client: ReturnType<typeof getPicnicClient>,
+  recipeUrlOrId: string,
+) {
+  const recipeId = await resolveRecipeId(recipeUrlOrId)
+  const page = await client.sendRequest(
+    "GET",
+    `/pages/selling-group-details-page?selling_group_id=${encodeURIComponent(recipeId)}`,
+    null,
+    true,
+  )
+  const parsed = parseRecipeIngredients(page)
+  if (!parsed) throw new Error(`Could not find recipe ingredient data for ${recipeId}`)
+  return parsed
+}
+
+function getErrorMessage(error: unknown): string {
+  return error instanceof Error ? error.message : String(error)
+}
+
+toolRegistry.register({
+  name: "picnic_get_recipe_ingredients",
+  description:
+    "Fetch structured Picnic recipe ingredients by recipe URL or ID. Returns selling-unit IDs, " +
+    "quantities, pantry flags, package display text, and prices for meal planning.",
+  inputSchema: recipeIngredientsInputSchema,
+  handler: async (args) => {
+    await ensureClientInitialized()
+    return fetchRecipeIngredientsByRef(getPicnicClient(), args.recipe_url_or_id)
+  },
+})
+
+toolRegistry.register({
+  name: "picnic_get_multiple_recipe_ingredients",
+  description:
+    "Fetch structured ingredient lists for multiple Picnic recipes. Returns successful recipes " +
+    "and per-input errors so one unavailable recipe does not discard the whole batch.",
+  inputSchema: z.object({
+    recipe_urls_or_ids: z
+      .array(z.string().min(1))
+      .min(1)
+      .max(20)
+      .describe("Picnic recipe URLs or 24-/32-character recipe IDs, up to 20."),
+  }),
+  handler: async (args) => {
+    await ensureClientInitialized()
+    const client = getPicnicClient()
+    const results = await Promise.allSettled(
+      args.recipe_urls_or_ids.map((input) => fetchRecipeIngredientsByRef(client, input)),
+    )
+
+    return {
+      recipes: results.flatMap((result) => (result.status === "fulfilled" ? [result.value] : [])),
+      errors: results.flatMap((result, index) =>
+        result.status === "rejected"
+          ? [{ input: args.recipe_urls_or_ids[index], error: getErrorMessage(result.reason) }]
+          : [],
+      ),
+    }
+  },
+})
+
+const recipeIngredientSchema = z.object({
+  ingredientId: z.string(),
+  sellingUnitId: z.string(),
+  name: z.string(),
+  packageInfo: z.string(),
+  priceCents: z.number().nullable(),
+  quantity: z.number(),
+  isPantryItem: z.boolean(),
+})
+
+const structuredRecipeIngredientsSchema = z.object({
+  recipeId: z.string(),
+  recipeName: z.string(),
+  portions: z.number(),
+  ingredients: z.array(recipeIngredientSchema),
+})
+
+toolRegistry.register({
+  name: "picnic_build_shopping_list",
+  description:
+    "Consolidate structured recipe ingredients into a shopping list. Skips pantry items, " +
+    "deduplicates products per recipe, and totals priceCents times quantity.",
+  inputSchema: z.object({
+    recipes: z.array(structuredRecipeIngredientsSchema).min(1).max(20),
+  }),
+  handler: async (args) => buildShoppingList(args.recipes),
+})
+
+toolRegistry.register({
+  name: "picnic_find_meal_combinations",
+  description:
+    "Rank combinations of structured Picnic recipes by shared non-pantry ingredients, " +
+    "using the same conservative cost calculation as picnic_build_shopping_list.",
+  inputSchema: z.object({
+    recipes: z.array(structuredRecipeIngredientsSchema).min(2).max(50),
+    count: z.number().int().min(2).describe("Number of recipes per combination."),
+    topK: z
+      .number()
+      .int()
+      .min(1)
+      .max(20)
+      .default(5)
+      .describe("Maximum number of combinations to return."),
+    maxTotalBudgetCents: z
+      .number()
+      .int()
+      .min(0)
+      .optional()
+      .describe("Exclude combinations whose conservative shopping-list cost exceeds this."),
+  }),
+  handler: async (args) => findMealCombinations(args),
 })
 
 // Get shopping cart tool
@@ -602,869 +1046,12 @@ toolRegistry.register({
   inputSchema: verify2FAInputSchema,
   handler: async (args) => {
     await ensureClientInitialized()
-    const client = getPicnicClient()
-
-    // We bypass client.verify2FACode() because sendRequest doesn't capture response headers.
-    // The Picnic API may return an updated authKey in x-picnic-auth after 2FA verification.
-    const url = client.url
-    const authKey = client.authKey
-    const response = await fetch(`${url}/user/2fa/verify`, {
-      method: "POST",
-      headers: {
-        "User-Agent": "okhttp/3.12.2",
-        "Content-Type": "application/json; charset=UTF-8",
-        ...(authKey && { "x-picnic-auth": authKey }),
-        "x-picnic-agent": "30100;1.15.232-15154",
-        "x-picnic-did": "3C417201548B2E3B",
-      },
-      body: JSON.stringify({ otp: args.code }),
-    })
-
-    if (!response.ok) {
-      throw new Error(`2FA verification failed: ${response.status} ${response.statusText}`)
-    }
-
-    // Capture updated auth key if the API returns one
-    const newAuthKey = response.headers.get("x-picnic-auth")
-    if (newAuthKey) {
-      client.authKey = newAuthKey
-    }
-
+    await verifyPicnic2FACode(args.code)
     await saveSession()
+
     return {
       message: "2FA code verified",
       code: args.code,
     }
   },
 })
-
-// Recipe tools
-//
-// The Picnic recipe endpoints return a `FusionPage` — a deeply nested PML
-// (Picnic Markup Language) tree that describes the rendered UI rather than
-// a clean data model. The raw payload is large (a single category page
-// returns 700+ recipes embedded in the layout tree) and not directly useful
-// for LLM consumption, so both the listing and the detail endpoints walk
-// the tree and project a compact summary; `full: true` bypasses the
-// projection for debugging.
-//
-// The picnic-api `recipe.getRecipesPage()` method targets `meals-page-root`,
-// which is only the navigation shell with three SUSPENSE tabs. The actual
-// recipe content lives one level deeper:
-//   - `cookbook-page-content`        → 30 highlighted recipes + category links
-//   - `recipe_cattree_<category>`    → all recipes in a single category
-// We hit those directly via `client.app.getPage(pageId)`.
-
-/**
- * A single recipe extracted from a Picnic Fusion page.
- *
- * Fields are best-effort: `recipe_id` is reliable (it comes from the
- * Snowplow analytics context Picnic attaches to every recipe block);
- * `title`, `cooking_time`, `tagline`, and `image_id` are derived from
- * heuristics on the surrounding PML and may be absent if the layout
- * changes.
- */
-interface RecipeSummary {
-  recipe_id: string
-  title?: string
-  cooking_time?: string
-  tagline?: string
-  image_id?: string
-}
-
-/** Detects Picnic's inline color markers like `#(#295813)…#(#295813)`. */
-const COLOR_MARKER_RE = /#\(#[0-9a-fA-F]{3,8}\)/
-/** True when a RICH_TEXT carries color markers (taglines / cooking time). */
-function isColorWrapped(markdown: string): boolean {
-  return COLOR_MARKER_RE.test(markdown)
-}
-
-// Picnic serves the NL, DE and FR markets and localizes all UI chrome. The
-// parsing below matches all three locales at once rather than plumbing
-// `config.PICNIC_COUNTRY_CODE` through: a page only ever contains one
-// locale's markers, so cross-locale false positives cannot occur. NL tokens
-// are verified against live responses; DE/FR tokens are best-effort.
-const COOKING_TIME_RE = /^\d+\s*min(\.|uten|utes)?$/i
-// Newer cookbook tiles use a compound format like
-// "15 min bereiden | 30 min totaal"; this loose token match is the fallback.
-const COOKING_TIME_TOKEN_RE = /(^|\s)\d+\s*min(\.|uten|utes)?\b/i
-const STEP_HEADER_RE = /^(stap|schritt|étape|etape)\s+\d+$/i
-const TIP_HEADER_RE = /^(tip|tipp|astuce)$/i
-/** Button/badge labels that may appear as RICH_TEXT inside a recipe block. */
-const UI_LABELS = new Set([
-  // NL
-  "Toevoegen",
-  "Nieuw",
-  "Niet alles op voorraad",
-  // DE
-  "Hinzufügen",
-  "Neu",
-  "Nicht alles auf Lager",
-  // FR
-  "Ajouter",
-  "Nouveau",
-  "Tout n'est pas en stock",
-])
-
-/**
- * Walks a FusionPage tree and returns one summary per recipe block.
- *
- * Picnic tags every recipe with an analytics context whose `data.recipe_id`
- * is the stable recipe ID. We find each such block, then collect every
- * RICH_TEXT and IMAGE descendant within it to derive a human-readable
- * title, cooking time, optional tagline, and lead image.
- *
- * Title heuristic: in both the cookbook and the category layout the title
- * is the only RICH_TEXT *not* wrapped in `#(#hexcolor)…#(#hexcolor)` color
- * markers (taglines and the cookbook cooking time are wrapped), so we key
- * on that structural cue; length ordering is only a tiebreaker between
- * plain candidates. The tagline is the wrapped text that is not the
- * cooking time.
- */
-function extractRecipesFromPage(page: unknown): RecipeSummary[] {
-  const out: RecipeSummary[] = []
-  const seen = new Set<string>()
-
-  const visit = (node: unknown): void => {
-    if (!node || typeof node !== "object") return
-    const obj = node as Record<string, unknown>
-
-    const analytics = obj.analytics as
-      | { contexts?: Array<{ data?: Record<string, unknown> }> }
-      | undefined
-    const recipeContext = analytics?.contexts?.find((c) => typeof c?.data?.recipe_id === "string")
-
-    if (recipeContext) {
-      const recipeId = recipeContext.data!.recipe_id as string
-      if (!seen.has(recipeId)) {
-        seen.add(recipeId)
-        const texts: Array<{ text: string; wrapped: boolean }> = []
-        const images: string[] = []
-        const gather = (n: unknown): void => {
-          if (!n || typeof n !== "object") return
-          const m = n as Record<string, unknown>
-          if (m.type === "RICH_TEXT" && typeof m.markdown === "string") {
-            // `wrapped` keys on color markers only (the title is the unwrapped
-            // text); `text` also strips bold so `**…**` never leaks into a title.
-            texts.push({ text: stripMd(m.markdown), wrapped: isColorWrapped(m.markdown) })
-          }
-          if (m.type === "IMAGE") {
-            const src = m.source as { id?: string } | undefined
-            if (src?.id) images.push(src.id)
-          }
-          for (const v of Object.values(m)) {
-            if (Array.isArray(v)) v.forEach(gather)
-            else if (v && typeof v === "object") gather(v)
-          }
-        }
-        gather(node)
-
-        const cookingTime =
-          texts.find((t) => COOKING_TIME_RE.test(t.text))?.text ??
-          // Compound formats ("15 min bereiden | 30 min totaal") are only
-          // matched among wrapped texts so a plain title mentioning minutes
-          // cannot be mistaken for the time.
-          texts.find((t) => t.wrapped && COOKING_TIME_TOKEN_RE.test(t.text))?.text
-        const isChrome = (t: string) => !t || t === cookingTime || UI_LABELS.has(t)
-        // The title is the only plain (unwrapped) text in both layouts;
-        // length ordering is just the tiebreaker for unknown-locale labels
-        // that slip past UI_LABELS.
-        const title = texts
-          .filter((t) => !t.wrapped && !isChrome(t.text))
-          .map((t) => t.text)
-          .sort((a, b) => b.length - a.length)[0]
-        // The tagline (cookbook layout only) is color-wrapped — identified
-        // structurally, so a tagline longer than the title cannot swap the two.
-        const tagline = texts.find((t) => t.wrapped && !isChrome(t.text))?.text
-
-        const summary: RecipeSummary = { recipe_id: recipeId }
-        if (title) summary.title = title
-        if (cookingTime) summary.cooking_time = cookingTime
-        if (tagline && tagline !== title) summary.tagline = tagline
-        if (images[0]) summary.image_id = images[0]
-        out.push(summary)
-      }
-      // Don't descend into a recipe block — its inner items are duplicate
-      // analytics contexts for the same recipe.
-      return
-    }
-
-    for (const v of Object.values(obj)) {
-      if (Array.isArray(v)) v.forEach(visit)
-      else if (v && typeof v === "object") visit(v)
-    }
-  }
-
-  visit(page)
-  return out
-}
-
-/**
- * Returns the list of recipe-category page IDs linked from a Fusion page.
- * Picnic embeds them as deeplinks like
- * `nl.picnic-supermarkt://store/page;id=recipe_cattree_20minuten`.
- * The full page ID (including its `recipe_cattree_` / `recipe-cattree-`
- * prefix) is returned: Picnic uses both separators and the server is strict
- * (`recipe_cattree_jamie-oliver` 404s where `recipe-cattree-jamie-oliver`
- * resolves), so the original form must round-trip back into
- * `picnic_get_recipes` unchanged rather than being re-prefixed.
- */
-function extractRecipeCategoryIds(page: unknown): string[] {
-  const found = new Set<string>()
-  const visit = (node: unknown): void => {
-    if (!node || typeof node !== "object") return
-    const obj = node as Record<string, unknown>
-    if (obj.actionType === "OPEN" && typeof obj.target === "string") {
-      const match = obj.target.match(/id=(recipe[_-]cattree[_-][a-z0-9_-]+)/i)
-      if (match) found.add(match[1])
-    }
-    for (const v of Object.values(obj)) {
-      if (Array.isArray(v)) v.forEach(visit)
-      else if (v && typeof v === "object") visit(v)
-    }
-  }
-  visit(page)
-  return [...found]
-}
-
-// Get recipes tool
-const getRecipesInputSchema = z.object({
-  category: z
-    .string()
-    .regex(/^[a-z0-9_-]+$/i, "may only contain letters, digits, '-' and '_'")
-    .optional()
-    .describe(
-      "Optional recipe category ID (e.g. '20minuten', 'vega', 'eenpans'); " +
-        "only letters, digits, '-' and '_' are accepted. When omitted, returns " +
-        "the cookbook highlights (~30 recipes) along with the list of available " +
-        "categories — pass those IDs back verbatim. When provided, returns the " +
-        "recipes in that category. Accepts a bare ID or a full " +
-        "'recipe_cattree_xyz' / 'recipe-cattree-xyz' page ID (the separator " +
-        "matters, so prefer the IDs returned in `categories`).",
-    ),
-  limit: z
-    .number()
-    .int()
-    .min(1)
-    .max(100)
-    .default(20)
-    .describe("Maximum number of recipes to return (1-100, default: 20)"),
-  offset: z
-    .number()
-    .int()
-    .min(0)
-    .default(0)
-    .describe("Number of recipes to skip for pagination (default: 0)"),
-  full: z
-    .boolean()
-    .default(false)
-    .describe(
-      "When false (default), returns a filtered list of {recipe_id, title, " +
-        "cooking_time, tagline?, image_id?}. When true, returns the raw " +
-        "FusionPage — a debugging escape hatch only: a single category page " +
-        "embeds 700+ recipes and the raw payload can exceed 1MB, which does " +
-        "not fit in an LLM context window.",
-    ),
-})
-
-toolRegistry.register({
-  name: "picnic_get_recipes",
-  description:
-    "Browse recipes from the Picnic cookbook. Without a category, returns " +
-    "highlighted recipes plus the list of available categories. With a " +
-    "category, returns the recipes in that category (a single category can " +
-    "contain hundreds of recipes; use limit/offset to page through). Use " +
-    "`picnic_get_recipe_details` afterwards to get ingredients and steps for a " +
-    "specific recipe. Text extraction is verified for NL accounts and " +
-    "best-effort for DE/FR.",
-  inputSchema: getRecipesInputSchema,
-  handler: async (args) => {
-    await ensureClientInitialized()
-    const client = getPicnicClient()
-
-    // `category` is untrusted MCP input that ends up as a path segment of
-    // `/pages/${pageId}` (picnic-api does not encode it), so the input
-    // schema restricts it to the category-id alphabet — '/', '.', '?' and
-    // '#' are rejected to keep this tool from issuing arbitrary
-    // authenticated GETs against other endpoints.
-    // Accept either a bare category id or a full page id; normalise to the
-    // page id Picnic expects. Picnic's IDs use both '_' and '-' as separators
-    // so we don't try to canonicalise — we pass through what the caller sent
-    // when it already contains the prefix.
-    let pageId: string
-    let bareCategoryId: string | undefined
-    if (args.category) {
-      pageId = /^recipe[_-]cattree[_-]/i.test(args.category)
-        ? args.category
-        : `recipe_cattree_${args.category}`
-      if (pageId !== args.category) bareCategoryId = args.category
-    } else {
-      pageId = "cookbook-page-content"
-    }
-
-    let page: unknown
-    try {
-      page = await client.app.getPage(pageId)
-    } catch (error) {
-      if (!bareCategoryId) throw error
-      const fallbackPageId = `recipe-cattree-${bareCategoryId}`
-      try {
-        page = await client.app.getPage(fallbackPageId)
-        pageId = fallbackPageId
-      } catch {
-        throw error
-      }
-    }
-
-    if (args.full) {
-      // Return compact JSON: the registry pretty-prints objects with 2-space
-      // indent, which inflates this already-oversized raw page by ~⅓.
-      return JSON.stringify(page)
-    }
-
-    const allRecipes = extractRecipesFromPage(page)
-    const startIndex = args.offset ?? 0
-    const limit = args.limit ?? 20
-    const paginated = allRecipes.slice(startIndex, startIndex + limit)
-
-    const result: Record<string, unknown> = {
-      pageId,
-      recipes: paginated,
-      pagination: {
-        offset: startIndex,
-        limit,
-        returned: paginated.length,
-        total: allRecipes.length,
-        hasMore: startIndex + limit < allRecipes.length,
-      },
-    }
-
-    // Surface category navigation so the LLM knows what to drill into next:
-    // always on the cookbook root, and also on "theme" category pages (e.g.
-    // recipe_cattree_thema-kids) that hold only sub-category links and no
-    // recipes of their own — otherwise drilling into a theme is a dead end.
-    const categoryIds = extractRecipeCategoryIds(page)
-    if ((!args.category || allRecipes.length === 0) && categoryIds.length > 0) {
-      result.categories = categoryIds
-    }
-
-    return result
-  },
-})
-
-// Get recipe details tool
-//
-// `client.recipe.getRecipeDetailsPage()` in picnic-api targets the
-// `recipe-details-page-root` page id, which Picnic has retired and now
-// returns "page-template not found". The live page is served at
-// `selling-group-details-page?selling_group_id=<recipe_id>`, so we go
-// directly through `client.app.getPage()` instead.
-//
-// The response is a 1.7MB Fusion page; the projection below pulls out
-// the four ingredient sections (CORE / CORE_STOCKABLE / CUPBOARD /
-// COMPLEMENTARY), cooking steps, the variation tip, and recipe metadata.
-// Pass `full: true` to bypass the projection and get the raw FusionPage.
-
-interface RecipeIngredient {
-  selling_unit_id?: string
-  ingredient_id?: string
-  name?: string
-  brand?: string
-  /** Display price in cents (e.g. 399 for €3.99). */
-  price?: number
-  unit_quantity?: string
-  /** How much of the product the recipe needs, e.g. "75 g". */
-  needed?: string
-  /** Default per-portion count Picnic ships with the recipe. */
-  quantity?: number
-  /** Whether Picnic pre-checks this item — pantry items are typically false. */
-  checked?: boolean
-}
-
-interface RecipeDetails {
-  recipe_id: string
-  name?: string
-  tagline?: string
-  description?: string
-  cooking_time?: string
-  portions?: number
-  image_id?: string
-  /** Items in the "Ingrediënten" tab — the core shopping list. */
-  ingredients: RecipeIngredient[]
-  /** Items under "Waarschijnlijk nog in huis" — likely already in your pantry. */
-  likely_in_stock: RecipeIngredient[]
-  /** Items under "Uit eigen keuken" — pantry staples (salt, pepper, oil). */
-  pantry: RecipeIngredient[]
-  /** Items under "Combineer met" — suggested complementary products. */
-  complementary: RecipeIngredient[]
-  /** Numbered cooking steps in order. */
-  steps: string[]
-  /** The variation tip from the "Tip" section, if present. */
-  tip?: string
-}
-
-/**
- * Strip Picnic's `#(#hexcolor)text#(#hexcolor)` color markers and `**bold**`
- * markup. NFC-normalizes so accented locale tokens (`Étape`, `Hinzufügen`)
- * compare equal regardless of the response's Unicode normal form.
- */
-function stripMd(s: string): string {
-  return s
-    .replace(/#\(#[0-9a-fA-F]{3,8}\)/g, "")
-    .replace(/\*\*/g, "")
-    .normalize("NFC")
-    .trim()
-}
-
-/**
- * Walk the tree and find the first node with the given `id`. Picnic uses
- * stable ids on both BLOCK and PML nodes (e.g. `sellable-components-CORE-list`
- * is a BLOCK, while `instructions-section` is a PML inside `instructions-block`),
- * so we don't constrain on `type`.
- */
-function findNodeById(node: unknown, id: string): unknown {
-  if (!node || typeof node !== "object") return null
-  const obj = node as Record<string, unknown>
-  if (obj.id === id) return obj
-  for (const v of Object.values(obj)) {
-    if (Array.isArray(v)) {
-      for (const c of v) {
-        const r = findNodeById(c, id)
-        if (r) return r
-      }
-    } else if (v && typeof v === "object") {
-      const r = findNodeById(v, id)
-      if (r) return r
-    }
-  }
-  return null
-}
-
-/** Walk the tree and collect every `selling_units` array we encounter. */
-function collectSellingUnitsArrays(node: unknown): Array<Record<string, unknown>[]> {
-  const out: Array<Record<string, unknown>[]> = []
-  const visit = (n: unknown): void => {
-    if (!n || typeof n !== "object") return
-    const obj = n as Record<string, unknown>
-    if (Array.isArray(obj.selling_units) && obj.selling_units.length > 0) {
-      out.push(obj.selling_units as Record<string, unknown>[])
-    }
-    for (const v of Object.values(obj)) {
-      if (Array.isArray(v)) v.forEach(visit)
-      else if (v && typeof v === "object") visit(v)
-    }
-  }
-  visit(node)
-  return out
-}
-
-/**
- * Build a lookup table mapping `ingredient_id` to the structured
- * `selling_units` entry, deduping across the multiple containers Picnic
- * embeds in the page tree.
- */
-function buildIngredientLookup(page: unknown): Map<string, Record<string, unknown>> {
-  const lookup = new Map<string, Record<string, unknown>>()
-  for (const arr of collectSellingUnitsArrays(page)) {
-    for (const entry of arr) {
-      const id = entry.ingredient_id
-      if (typeof id === "string" && !lookup.has(id)) {
-        lookup.set(id, entry)
-      }
-    }
-  }
-  return lookup
-}
-
-/**
- * Extract the recipe metadata container — the only `selling_units`-bearing
- * object that also carries `recipe_name` and `portions`. Picnic embeds
- * several copies; we take the first.
- */
-function findRecipeMetaContainer(page: unknown): Record<string, unknown> | null {
-  let result: Record<string, unknown> | null = null
-  const visit = (n: unknown): void => {
-    if (result || !n || typeof n !== "object") return
-    const obj = n as Record<string, unknown>
-    if (
-      Array.isArray(obj.selling_units) &&
-      typeof obj.recipe_name === "string" &&
-      typeof obj.portions === "number"
-    ) {
-      result = obj
-      return
-    }
-    for (const v of Object.values(obj)) {
-      if (Array.isArray(v)) v.forEach(visit)
-      else if (v && typeof v === "object") visit(v)
-    }
-  }
-  visit(page)
-  return result
-}
-
-/**
- * Extract the per-tile ingredient summary from a leaf list block (e.g.
- * `sellable-components-CORE-list`). Each direct child is a PML "tile"
- * whose id encodes the `ingredient_id` and whose RICH_TEXT descendants
- * carry name, brand, price, unit_quantity, and the "(N g nodig)" needed
- * label.
- */
-function extractIngredientsFromList(
-  listBlock: unknown,
-  lookup: Map<string, Record<string, unknown>>,
-): RecipeIngredient[] {
-  if (!listBlock || typeof listBlock !== "object") return []
-  const block = listBlock as Record<string, unknown>
-  const children = Array.isArray(block.children) ? block.children : []
-  const items: RecipeIngredient[] = []
-
-  for (const child of children) {
-    if (!child || typeof child !== "object") continue
-    const tile = child as Record<string, unknown>
-    const tileId = typeof tile.id === "string" ? tile.id : ""
-    const ingredientMatch = tileId.match(/core-wide-selling-unit-tile-(.+)$/)
-    const ingredientId = ingredientMatch ? ingredientMatch[1] : undefined
-
-    const texts: string[] = []
-    const gather = (n: unknown): void => {
-      if (!n || typeof n !== "object") return
-      const m = n as Record<string, unknown>
-      if (m.type === "RICH_TEXT" && typeof m.markdown === "string") {
-        texts.push(stripMd(m.markdown))
-      }
-      for (const v of Object.values(m)) {
-        if (Array.isArray(v)) v.forEach(gather)
-        else if (v && typeof v === "object") gather(v)
-      }
-    }
-    gather(child)
-
-    // Filter out chevrons and empty strings; the order Picnic uses is
-    // [name, brand?, price, unit_quantity, "(N <unit> nodig)"?, promo?].
-    const cleaned = texts.filter((t) => t && t !== ">")
-    // "(75 g nodig)" — NL verified; the DE/FR labels are best-effort.
-    const needed = cleaned
-      .map((t) => t.match(/^\(([^)]+?)\s*(?:nodig|benötigt|nécessaires?)\)$/i)?.[1]?.trim())
-      .find((t): t is string => Boolean(t))
-    // Picnic uses `.` as decimal separator in NL and `,` in DE.
-    const priceStr = cleaned.find((t) => /^\d+[.,]\d{2}$/.test(t))
-    const priceCents = priceStr
-      ? Math.round(parseFloat(priceStr.replace(",", ".")) * 100)
-      : undefined
-    // Accept comma decimals (like the price) and DE/FR unit words; longer
-    // units precede their prefixes (`liter` before `l`) so the match is greedy.
-    const unitQuantity = cleaned.find((t) =>
-      /^\d+([.,]\d+)?\s*(?:gram|kg|ml|cl|liter|l|g|stuks?|stück|stuck|pièces?|pieces?)\b/i.test(t),
-    )
-
-    // Name is the first non-special text. Brand (if present) is the next
-    // non-numeric, non-promo, non-needed text after the name. Brands on
-    // Picnic are short labels (no full sentences); guard against trailing
-    // prose (e.g. allergen notes) bleeding into the brand slot.
-    const specials = new Set<string>(
-      [
-        needed,
-        priceStr,
-        unitQuantity,
-        "Voeg ingrediënt toe",
-        "Zutat hinzufügen",
-        "Ajouter l'ingrédient",
-      ].filter((s): s is string => Boolean(s)),
-    )
-    const promoRe = /^\d+\s+(?:voor|für|pour)\s+€/i
-    // A quantity/price token is a number followed by a space or end of string
-    // ("400 gram", "3.49"); this must NOT exclude product names that merely
-    // start with a digit ("100% pindakaas", "30+ kaas", "5-granenbrood").
-    // Any text carrying a price (e.g. the "nu €2.29" promo label) is also
-    // chrome, never a name or brand.
-    const looksLikeNumberOrPromo = (t: string) =>
-      promoRe.test(t) ||
-      /€/.test(t) ||
-      /^\(.*(?:nodig|benötigt|nécessaires?)\)$/i.test(t) ||
-      /^\d+([.,]\d+)?(\s|$)/.test(t)
-    const looksLikeBrand = (t: string) => t.length <= 40 && !/[.!?]/.test(t)
-    const nonSpecial = cleaned.filter((t) => !specials.has(t) && !looksLikeNumberOrPromo(t))
-    const name = nonSpecial[0]
-    const brand = nonSpecial[1] && looksLikeBrand(nonSpecial[1]) ? nonSpecial[1] : undefined
-
-    const lookupEntry = ingredientId ? lookup.get(ingredientId) : undefined
-    const sellingUnitId =
-      typeof lookupEntry?.selling_unit_id === "string" ? lookupEntry.selling_unit_id : undefined
-    const quantity = typeof lookupEntry?.quantity === "number" ? lookupEntry.quantity : undefined
-    const checked = typeof lookupEntry?.checked === "boolean" ? lookupEntry.checked : undefined
-
-    const item: RecipeIngredient = {}
-    if (sellingUnitId) item.selling_unit_id = sellingUnitId
-    if (ingredientId) item.ingredient_id = ingredientId
-    if (name) item.name = name
-    if (brand) item.brand = brand
-    if (priceCents !== undefined) item.price = priceCents
-    if (unitQuantity) item.unit_quantity = unitQuantity
-    if (needed) item.needed = needed
-    if (quantity !== undefined) item.quantity = quantity
-    if (checked !== undefined) item.checked = checked
-
-    if (item.name || item.selling_unit_id) items.push(item)
-  }
-
-  return items
-}
-
-/**
- * Parse the `instructions-section` block, which contains an alternating
- * sequence of localized step headers (`Stap N` / `Schritt N` / `Étape N`)
- * and step text, optionally followed by a localized tip header (`Tip` /
- * `Tipp` / `Astuce`) and tip text.
- */
-function extractStepsAndTip(page: unknown): { steps: string[]; tip?: string } {
-  const block = findNodeById(page, "instructions-section")
-  if (!block) return { steps: [] }
-
-  const texts: string[] = []
-  const gather = (n: unknown): void => {
-    if (!n || typeof n !== "object") return
-    const m = n as Record<string, unknown>
-    if (m.type === "RICH_TEXT" && typeof m.markdown === "string") {
-      texts.push(stripMd(m.markdown))
-    }
-    for (const v of Object.values(m)) {
-      if (Array.isArray(v)) v.forEach(gather)
-      else if (v && typeof v === "object") gather(v)
-    }
-  }
-  gather(block)
-
-  // A header's body is the next text, but only if that text is not itself a
-  // header — otherwise a step with a missing body would swallow the following
-  // header as its text and drop a real step.
-  const isHeader = (t: string) => STEP_HEADER_RE.test(t) || TIP_HEADER_RE.test(t)
-  const steps: string[] = []
-  let tip: string | undefined
-  for (let i = 0; i < texts.length; i++) {
-    const body = texts[i + 1]
-    if (!body || isHeader(body)) continue
-    if (STEP_HEADER_RE.test(texts[i])) {
-      steps.push(body)
-      i += 1
-    } else if (TIP_HEADER_RE.test(texts[i])) {
-      tip = body
-      i += 1
-    }
-  }
-  return { steps, tip }
-}
-
-/**
- * Project a `selling-group-details-page` Fusion response into a clean
- * recipe summary. Designed to be resilient to missing sections — any
- * sub-extractor returning empty just yields an empty array / undefined.
- */
-function extractRecipeDetails(page: unknown, recipeId: string): RecipeDetails {
-  const meta = findRecipeMetaContainer(page)
-  const headerBlock = findNodeById(page, "sellable-header-container")
-  const imageBlock = findNodeById(page, "selling-group-details-image-wrapper")
-
-  // Header texts nominally come in [tagline, name, description] order, but
-  // extra chips can appear; the fields are grounded relative to the
-  // canonical name below rather than by fixed slot.
-  const headerTexts: string[] = []
-  const gatherText = (n: unknown): void => {
-    if (!n || typeof n !== "object") return
-    const m = n as Record<string, unknown>
-    if (m.type === "RICH_TEXT" && typeof m.markdown === "string") {
-      headerTexts.push(stripMd(m.markdown))
-    }
-    for (const v of Object.values(m)) {
-      if (Array.isArray(v)) v.forEach(gatherText)
-      else if (v && typeof v === "object") gatherText(v)
-    }
-  }
-  gatherText(headerBlock)
-
-  // Image block — first IMAGE node carries the recipe hero.
-  let imageId: string | undefined
-  const gatherImage = (n: unknown): void => {
-    if (imageId || !n || typeof n !== "object") return
-    const m = n as Record<string, unknown>
-    if (m.type === "IMAGE") {
-      const src = m.source as { id?: string } | undefined
-      if (src?.id) {
-        imageId = src.id
-        return
-      }
-    }
-    for (const v of Object.values(m)) {
-      if (Array.isArray(v)) v.forEach(gatherImage)
-      else if (v && typeof v === "object") gatherImage(v)
-    }
-  }
-  gatherImage(imageBlock)
-
-  // Cooking time: first RICH_TEXT in the page matching the localized
-  // `<digits> min` pattern.
-  let cookingTime: string | undefined
-  const visitForTime = (n: unknown): void => {
-    if (cookingTime || !n || typeof n !== "object") return
-    const m = n as Record<string, unknown>
-    if (m.type === "RICH_TEXT" && typeof m.markdown === "string") {
-      const t = stripMd(m.markdown)
-      if (COOKING_TIME_RE.test(t)) {
-        cookingTime = t
-        return
-      }
-    }
-    for (const v of Object.values(m)) {
-      if (Array.isArray(v)) v.forEach(visitForTime)
-      else if (v && typeof v === "object") visitForTime(v)
-    }
-  }
-  visitForTime(page)
-
-  const lookup = buildIngredientLookup(page)
-  const ingredients = extractIngredientsFromList(
-    findNodeById(page, "sellable-components-CORE-list"),
-    lookup,
-  )
-  const likelyInStock = extractIngredientsFromList(
-    findNodeById(page, "sellable-components-CORE_STOCKABLE-list"),
-    lookup,
-  )
-  const pantry = extractIngredientsFromList(
-    findNodeById(page, "sellable-components-CUPBOARD-list"),
-    lookup,
-  )
-  const complementary = extractIngredientsFromList(
-    findNodeById(page, "sellable-components-COMPLEMENTARY-list"),
-    lookup,
-  )
-  const { steps, tip } = extractStepsAndTip(page)
-
-  const result: RecipeDetails = {
-    recipe_id: recipeId,
-    ingredients,
-    likely_in_stock: likelyInStock,
-    pantry,
-    complementary,
-    steps,
-  }
-  if (meta && typeof meta.recipe_name === "string") result.name = meta.recipe_name
-  else if (headerTexts[1]) result.name = headerTexts[1]
-
-  // Ground tagline/description relative to where the canonical name sits in
-  // the header instead of fixed [tagline, name, description] slots, so an
-  // extra badge or duration chip cannot silently shift the fields.
-  const isChrome = (t: string) => COOKING_TIME_RE.test(t) || UI_LABELS.has(t)
-  const nameIdx = result.name ? headerTexts.indexOf(result.name) : -1
-  if (nameIdx >= 0) {
-    const before = headerTexts.slice(0, nameIdx).filter((t) => t && !isChrome(t))
-    const after = headerTexts.slice(nameIdx + 1).filter((t) => t && !isChrome(t))
-    const tagline = before[before.length - 1]
-    if (tagline && tagline !== result.name) result.tagline = tagline
-    if (after[0] && after[0] !== result.tagline) result.description = after[0]
-  } else {
-    // Name unknown or not rendered in the header — fall back to slots.
-    if (headerTexts[0] && headerTexts[0] !== result.name) result.tagline = headerTexts[0]
-    if (headerTexts[2] && headerTexts[2] !== result.tagline) result.description = headerTexts[2]
-  }
-  if (cookingTime) result.cooking_time = cookingTime
-  if (meta && typeof meta.portions === "number") result.portions = meta.portions
-  if (imageId) result.image_id = imageId
-  if (tip) result.tip = tip
-  return result
-}
-
-const recipeDetailsInputSchema = z.object({
-  recipeId: z.string().min(1).describe("The ID of the recipe to get details for"),
-  full: z
-    .boolean()
-    .default(false)
-    .describe(
-      "When false (default), returns a filtered projection with ingredients, " +
-        "pantry items, cooking steps, and the variation tip. When true, returns " +
-        "the raw FusionPage — a debugging escape hatch only: the raw page is " +
-        "~1.7MB and does not fit in an LLM context window.",
-    ),
-})
-
-toolRegistry.register({
-  name: "picnic_get_recipe_details",
-  description:
-    "Get the detail page for a single Picnic recipe by ID. Returns the recipe " +
-    "name, cooking time, default portions, image, and four ingredient sections " +
-    "(core ingredients, items likely already in stock, pantry staples 'uit eigen " +
-    "keuken', and complementary suggestions), plus the numbered cooking steps " +
-    "and the variation tip if present. Each ingredient includes its " +
-    "selling_unit_id (usable with cart tools), name, brand, price (cents), " +
-    "unit_quantity, and the amount needed for the recipe. Text extraction is " +
-    "verified for NL accounts and best-effort for DE/FR. Set `full: true` " +
-    "(debugging only) to get the raw ~1.7MB FusionPage instead.",
-  inputSchema: recipeDetailsInputSchema,
-  handler: async (args) => {
-    await ensureClientInitialized()
-    const client = getPicnicClient()
-
-    // Fetch the live page directly: picnic-api's `recipe.getRecipeDetailsPage`
-    // hardcodes a retired page-template id and 404s. The actual live page is
-    // served as `selling-group-details-page` keyed by `selling_group_id`,
-    // which is the same identifier as the recipe id.
-    const page = await client.app.getPage(
-      `selling-group-details-page?selling_group_id=${encodeURIComponent(args.recipeId)}`,
-    )
-
-    if (args.full) {
-      // Compact JSON — avoid the registry's 2-space pretty-print inflating
-      // the ~1.7MB raw page further.
-      return JSON.stringify(page)
-    }
-
-    return extractRecipeDetails(page, args.recipeId)
-  },
-})
-
-// Save recipe tool
-const saveRecipeInputSchema = z.object({
-  recipeId: z.string().min(1).describe("The ID of the recipe to save"),
-})
-
-toolRegistry.register({
-  name: "picnic_save_recipe",
-  description: "Save a recipe to the user's saved recipes list",
-  inputSchema: saveRecipeInputSchema,
-  handler: async (args) => {
-    await ensureClientInitialized()
-    const client = getPicnicClient()
-    await client.recipe.saveRecipe(args.recipeId)
-    return {
-      message: "Recipe saved",
-      recipeId: args.recipeId,
-    }
-  },
-})
-
-// Unsave recipe tool
-const unsaveRecipeInputSchema = z.object({
-  recipeId: z.string().min(1).describe("The ID of the recipe to unsave"),
-})
-
-toolRegistry.register({
-  name: "picnic_unsave_recipe",
-  description: "Remove a recipe from the user's saved recipes list",
-  inputSchema: unsaveRecipeInputSchema,
-  handler: async (args) => {
-    await ensureClientInitialized()
-    const client = getPicnicClient()
-    await client.recipe.unsaveRecipe(args.recipeId)
-    return {
-      message: "Recipe unsaved",
-      recipeId: args.recipeId,
-    }
-  },
-})
-
-// Note: recipe-context cart mutations (add/remove product with recipe context)
-// were intentionally left out. The selling_unit_id returned from
-// `picnic_get_recipe_details` is the same id used by `picnic_add_to_cart` and
-// `picnic_remove_from_cart`, so callers can mutate the cart directly without
-// the extra recipe-stepper analytics context that the dedicated endpoints
-// would attach.

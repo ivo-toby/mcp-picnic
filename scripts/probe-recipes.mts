@@ -1,4 +1,4 @@
-// Live verification for picnic_get_recipes against the user's real Picnic
+// Live verification for picnic_browse_recipes against the user's real Picnic
 // account. Uses the real tool handler so the extractor logic is covered
 // end-to-end. Run: npx tsx scripts/probe-recipes.mts [category]
 import { toolRegistry } from "../src/tools/registry.js"
@@ -8,7 +8,7 @@ import { initializePicnicClient } from "../src/utils/picnic-client.js"
 const category = process.argv[2]
 
 await initializePicnicClient()
-const result = await toolRegistry.executeTool("picnic_get_recipes", {
+const result = await toolRegistry.executeTool("picnic_browse_recipes", {
   ...(category ? { category } : {}),
   limit: 100,
 })
@@ -18,8 +18,7 @@ console.log(`pageId: ${payload.pageId}`)
 console.log(`total:  ${payload.pagination.total}`)
 for (const r of payload.recipes) {
   console.log(
-    ` - ${r.recipe_id}  ${r.title ?? "<no title>"}  [${r.cooking_time ?? "?"}]` +
-      (r.tagline ? `  — ${r.tagline}` : ""),
+    ` - ${r.recipeId}  ${r.name ?? "<no name>"}  [${r.segments.join(", ") || "no segment"}]`,
   )
 }
 if (payload.categories) {

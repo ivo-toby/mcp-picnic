@@ -42,19 +42,35 @@ Get product suggestions based on a query.
 
 - `query` (string): Query for product suggestions
 
+#### `picnic_get_product_details`
+
+Look up product details by selling unit ID.
+
+**Parameters:**
+
+- `productId` (string): The product selling unit ID returned by search or cart
+- `full` (boolean, optional): Return full product details, including description, allergens, nutritional info, promotions, and similar products
+
+#### `picnic_get_image`
+
+Get product image data.
+
+**Parameters:**
+
+- `imageId` (string): The image ID returned by search, cart, or product details
+- `size` (string): Image size (`tiny`, `small`, `medium`, `large`, or `extra-large`)
+
+### Removed Legacy Product Tools
+
 #### ~~`picnic_get_article`~~ (REMOVED)
 
 **This tool has been removed** because the Picnic API deprecated product detail endpoints. See [GitHub issue #23](https://github.com/MRVDH/picnic-api/issues/23).
 
-**Alternative:** Use `picnic_search` to get basic product information (id, name, price, unit).
+**Alternative:** Use `picnic_get_product_details` for product details or `picnic_search` for basic product information (id, name, price, unit).
 
-#### `picnic_get_categories`
+#### ~~`picnic_get_categories`~~ (REMOVED)
 
-Get product categories from Picnic.
-
-**Parameters:**
-
-- `depth` (number, optional): Category depth to retrieve (0-5, default: 0)
+**This tool is not available** because `picnic-api` v4 removed the underlying `getCategories()` function. Category browsing would require a new Fusion page implementation.
 
 ### Shopping Cart Management
 
@@ -157,26 +173,6 @@ Get details of the current logged-in user.
 
 Get user information including toggled features.
 
-### Lists Management
-
-#### `picnic_get_lists`
-
-Get shopping lists and sublists.
-
-**Parameters:**
-
-- `depth` (number, optional): List depth to retrieve (0-5, default: 0)
-
-#### `picnic_get_list`
-
-Get a specific list or sublist with its items.
-
-**Parameters:**
-
-- `listId` (string): The ID of the list to get
-- `subListId` (string, optional): The ID of the sub list to get
-- `depth` (number, optional): List depth to retrieve (0-5, default: 0)
-
 ### Payment & Transactions
 
 #### `picnic_get_payment_profile`
@@ -199,116 +195,104 @@ Get detailed information about a specific wallet transaction.
 
 - `transactionId` (string): The ID of the transaction to get details for
 
-### Recipes
+### Recipes & Meal Planning
 
-Picnic's recipe endpoints return Fusion pages (a layout tree); the listing tool walks that tree and returns a small per-recipe summary by default. Pass `full: true` to get the raw response, or call `picnic_get_recipe_details` for ingredients and steps.
+#### `picnic_browse_recipes`
 
-#### `picnic_get_recipes`
-
-Browse recipes from the Picnic cookbook.
-
-- Without a `category`: returns the cookbook highlights (~30 recipes) plus the list of available category IDs (e.g. `20minuten`, `vega`, `eenpans`).
-- With a `category`: returns the recipes in that category. A single category can contain hundreds of recipes; use `limit`/`offset` to page through.
+Browse Picnic cookbook recipes. Without a `category`, this returns cookbook highlights plus available recipe category page IDs when Picnic exposes them. With a `category`, this fetches that category page.
 
 **Parameters:**
 
-- `category` (string, optional): Category ID (e.g. `"20minuten"`) or full page ID (e.g. `"recipe_cattree_20minuten"`)
-- `limit` (number, optional): Maximum number of recipes to return (1-100, default: 20)
+- `category` (string, optional): Bare category ID (for example `"20minuten"`) or full page ID (for example `"recipe-cattree-jamie-oliver"`)
+- `limit` (number, optional): Maximum number of recipes to return (1-100, default: 25)
 - `offset` (number, optional): Number of recipes to skip for pagination (default: 0)
-- `full` (boolean, optional): When `true`, returns the raw FusionPage instead of a filtered list (default: `false`)
 
-**Filtered response shape:**
+#### `picnic_get_recipe`
 
-```json
-{
-  "pageId": "cookbook-page-content",
-  "recipes": [
-    {
-      "recipe_id": "69a6d2ab92f7b13019c86579",
-      "title": "Kip-kormaballetjes met mangosalsa",
-      "cooking_time": "20 min",
-      "tagline": "Tropische verrassing",
-      "image_id": "recipes/28860cbeaf..."
-    }
-  ],
-  "pagination": { "offset": 0, "limit": 20, "returned": 20, "total": 30, "hasMore": true },
-  "categories": ["20minuten", "vega", "eenpans"]
-}
-```
-
-The `categories` field is only present on the cookbook root (when `category` is omitted).
-
-#### `picnic_get_recipe_details`
-
-Get a structured projection of a single Picnic recipe — metadata, the four ingredient sections, numbered cooking steps, and the variation tip. Set `full: true` to get the raw 1.7MB FusionPage instead.
+Fetch a Picnic recipe by URL or recipe ID.
 
 **Parameters:**
 
-- `recipeId` (string): The recipe ID (as returned by `picnic_get_recipes`)
-- `full` (boolean, optional): When `true`, returns the raw FusionPage (default: `false`)
+- `recipe_url_or_id` (string): A Picnic recipe URL or 24-/32-character recipe ID
 
-**Filtered response shape:**
+#### `picnic_get_saved_recipes`
 
-```json
-{
-  "recipe_id": "69a6d2ab92f7b13019c86579",
-  "name": "Kip-kormaballetjes met mangosalsa",
-  "tagline": "Tropische verrassing",
-  "description": "Ook dit gerecht laat maar weer eens zien hoe goed zoet en hartig samengaan!",
-  "cooking_time": "20 min",
-  "portions": 1,
-  "image_id": "recipes/28860cbeaf...",
-  "ingredients": [
-    {
-      "selling_unit_id": "s1015074",
-      "ingredient_id": "00abaaf6-...",
-      "name": "Kipgehakt",
-      "brand": "'t Slagershuys",
-      "price": 399,
-      "unit_quantity": "300 gram",
-      "needed": "75 g",
-      "quantity": 1,
-      "checked": true
-    }
-  ],
-  "likely_in_stock": [{ "name": "Bio knoflook", "...": "..." }],
-  "pantry": [{ "name": "Zeezout", "brand": "Verstegen", "...": "..." }],
-  "complementary": [{ "name": "Jalapeno groene pepers", "...": "..." }],
-  "steps": ["Bereid de rijst...", "Doe het kipgehakt...", "..."],
-  "tip": "Hou je van pittig? Voeg dan een paar ringetjes jalapeño peper toe!"
-}
-```
+List recipes saved in the user's Picnic cookbook.
 
-The four ingredient sections come from Picnic's own categorisation:
+**Parameters:**
 
-- **`ingredients`** — the core shopping list (Picnic's "Ingrediënten")
-- **`likely_in_stock`** — items Picnic guesses you already have ("Waarschijnlijk nog in huis")
-- **`pantry`** — staples like salt, pepper, oil ("Uit eigen keuken")
-- **`complementary`** — suggested additions ("Combineer met")
+- `limit` (number, optional): Maximum number of recipes to return (1-100, default: 25)
+- `offset` (number, optional): Number of recipes to skip for pagination (default: 0)
 
-`price` is in cents. `selling_unit_id` is usable directly with `picnic_add_to_cart`.
+#### `picnic_get_own_recipes`
+
+List user-created Picnic recipes.
+
+**Parameters:**
+
+- `limit` (number, optional): Maximum number of recipes to return (1-100, default: 25)
+- `offset` (number, optional): Number of recipes to skip for pagination (default: 0)
 
 #### `picnic_save_recipe`
 
-Save a recipe to the user's saved recipes list.
+Save a recipe to the user's Picnic cookbook.
 
 **Parameters:**
 
-- `recipeId` (string): The ID of the recipe to save
+- `recipe_url_or_id` (string): A Picnic recipe URL or 24-/32-character recipe ID
 
 #### `picnic_unsave_recipe`
 
-Remove a recipe from the user's saved recipes list.
+Remove a recipe from the user's Picnic cookbook.
 
 **Parameters:**
 
-- `recipeId` (string): The ID of the recipe to unsave
+- `recipe_url_or_id` (string): A Picnic recipe URL or 24-/32-character recipe ID
 
-### Other
+#### `picnic_add_recipe_to_cart`
 
-#### `picnic_get_mgm_details`
+Add a recipe's ingredients to the shopping cart by assigning the recipe selling group to the basket.
 
-Get MGM (friends discount) details.
+**Parameters:**
+
+- `recipe_url_or_id` (string): A Picnic recipe URL or 24-/32-character recipe ID
+- `portions` (number, optional): Number of portions to add
+
+#### `picnic_remove_recipe_from_cart`
+
+Remove a recipe's ingredients from the shopping cart.
+
+**Parameters:**
+
+- `recipe_url_or_id` (string): A Picnic recipe URL or 24-/32-character recipe ID
+
+#### `picnic_get_recipe_ingredients`
+
+Fetch structured recipe ingredients for meal planning.
+
+**Parameters:**
+
+- `recipe_url_or_id` (string): A Picnic recipe URL or 24-/32-character recipe ID
+
+#### `picnic_get_multiple_recipe_ingredients`
+
+Fetch structured ingredients for multiple recipes.
+
+**Parameters:**
+
+- `recipe_urls_or_ids` (array of strings): Picnic recipe URLs or 24-/32-character recipe IDs, up to 20
+
+#### `picnic_build_shopping_list`
+
+Consolidate structured recipe ingredients into a shopping list.
+
+#### `picnic_find_meal_combinations`
+
+Rank recipe combinations by shared non-pantry ingredients and optional budget.
+
+### Other Removed Legacy Tools
+
+The legacy `picnic_get_lists`, `picnic_get_list`, and `picnic_get_mgm_details` tools are not available because `picnic-api` v4 removed their backing APIs.
 
 ## Usage Example
 

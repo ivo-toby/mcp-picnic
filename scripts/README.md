@@ -7,10 +7,10 @@ be set (e.g. in `.env`) even when a saved `picnic-session.json` exists, since
 the env vars are parsed before the session file is consulted. With a valid
 saved session the credentials aren't actually used for a fresh login.
 
-| Script                     | Purpose                                                                       |
-| -------------------------- | ----------------------------------------------------------------------------- |
-| `probe-recipes.mts`        | Run the real `picnic_get_recipes` handler against the cookbook or a category. |
-| `probe-recipe-details.mts` | Run the real `picnic_get_recipe_details` handler for one recipe.              |
+| Script                     | Purpose                                                                          |
+| -------------------------- | -------------------------------------------------------------------------------- |
+| `probe-recipes.mts`        | Run the real `picnic_browse_recipes` handler against the cookbook or a category. |
+| `probe-recipe-details.mts` | Run the real `picnic_get_recipe` handler for one recipe.                         |
 
 Run with [tsx](https://github.com/privatenumber/tsx):
 

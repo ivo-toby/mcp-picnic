@@ -20,7 +20,7 @@
     "bin"
   ],
   "scripts": {
-    "build": "node build.js && chmod +x bin/mcp-server.js",
+    "build": "node build.js",
     "clean": "rm -rf dist",
     "lint": "eslint src/**/*.ts",
     "lint:fix": "eslint --fix src/**/*.ts",
@@ -35,7 +35,8 @@
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.27.1",
-    "picnic-api": "^4.0.0",
+    "picnic-api": "^4.5.0",
+    "undici": "^6.21.0",
     "zod": "^3.24.4",
     "zod-to-json-schema": "^3.25.1"
   },
