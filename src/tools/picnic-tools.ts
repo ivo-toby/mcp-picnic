@@ -375,11 +375,28 @@ toolRegistry.register({
   handler: async (args) => {
     await ensureClientInitialized()
     const client = getPicnicClient()
-    const image = await client.catalog.getImage(args.imageId, args.size)
+    // NOTE: deliberately move away from using picnic-api's catalog.getImage(). 
+    // That method wrongfully builds an absolute URL and passes it as the request
+    // *path*, which HttpClient.sendRequest() then re-prefixes with the API base 
+    // URL. The result is an invalid URL like
+    // `.../api/15https://.../static/images/<id>/<size>.png` that Picnic rejects
+    // with HTTP 400 "Ambiguous URI empty segment". Build the public static-images 
+    // URL ourselves and fetch it directly.
+    const url = `${staticImagesBaseUrl(client)}/${args.imageId}/${args.size}.png`
+    const response = await fetch(url)
+    if (!response.ok) {
+      throw new Error(
+        `Failed to fetch image (${response.status} ${response.statusText}) from ${url}`,
+      )
+    }
+    const base64 = Buffer.from(await response.arrayBuffer()).toString("base64")
+    
     return {
       imageId: args.imageId,
       size: args.size,
-      image,
+      url,
+      mimeType: "image/png",
+      dataUri: `data:image/png;base64,${base64}`,
     }
   },
 })
@@ -394,7 +411,7 @@ toolRegistry.register({
 
 // Base URL for recipe/product image derivatives, derived from the API URL, e.g.
 // https://storefront-prod.de.picnicinternational.com/static/images
-function recipeImageBaseUrl(client: ReturnType<typeof getPicnicClient>): string {
+function staticImagesBaseUrl(client: ReturnType<typeof getPicnicClient>): string {
   return client.url.replace(/\/api\/.*$/, "/static/images")
 }
 
@@ -449,7 +466,7 @@ function extractRecipeCategoryIds(page: unknown): string[] {
 
 async function fetchCookbookRecipes(client: ReturnType<typeof getPicnicClient>) {
   const { page } = await fetchRecipeListPage(client)
-  return parseRecipeList(page, { imageBaseUrl: recipeImageBaseUrl(client) })
+  return parseRecipeList(page, { imageBaseUrl: staticImagesBaseUrl(client) })
 }
 
 function paginateRecipes(all: ReturnType<typeof parseRecipeList>, offset: number, limit: number) {
@@ -501,7 +518,7 @@ toolRegistry.register({
       null,
       true,
     )
-    const parsed = parseSellingGroupRecipe(page, { imageBaseUrl: recipeImageBaseUrl(client) })
+    const parsed = parseSellingGroupRecipe(page, { imageBaseUrl: staticImagesBaseUrl(client) })
     const sourceUrl = buildRecipeSourceUrl(config.PICNIC_COUNTRY_CODE, recipeId)
     return { recipeId, sourceUrl, ...parsed }
   },
@@ -543,7 +560,7 @@ toolRegistry.register({
     await ensureClientInitialized()
     const client = getPicnicClient()
     const { pageId, page } = await fetchRecipeListPage(client, args.category)
-    const all = parseRecipeList(page, { imageBaseUrl: recipeImageBaseUrl(client) })
+    const all = parseRecipeList(page, { imageBaseUrl: staticImagesBaseUrl(client) })
     const result = { pageId, ...paginateRecipes(all, args.offset ?? 0, args.limit ?? 25) }
     const categories = extractRecipeCategoryIds(page)
     if ((!args.category || all.length === 0) && categories.length > 0) {
