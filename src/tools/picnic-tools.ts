@@ -1,5 +1,5 @@
 import { z } from "zod"
-import { toolRegistry } from "./registry.js"
+import { toolRegistry, mcpContent } from "./registry.js"
 import {
   getPicnicClient,
   initializePicnicClient,
@@ -370,17 +370,21 @@ const imageInputSchema = z.object({
 
 toolRegistry.register({
   name: "picnic_get_image",
-  description: "Get image data for a product using the image ID and size",
+  description:
+    "Get a product image by image ID and size. Returns the image itself as MCP image content.",
   inputSchema: imageInputSchema,
   handler: async (args) => {
     await ensureClientInitialized()
     const client = getPicnicClient()
     const image = await client.catalog.getImage(args.imageId, args.size)
-    return {
-      imageId: args.imageId,
-      size: args.size,
-      image,
-    }
+    // Picnic serves these as PNG (/static/images/<id>/<size>.png).
+    return mcpContent([
+      {
+        type: "image",
+        data: Buffer.from(image).toString("base64"),
+        mimeType: "image/png",
+      },
+    ])
   },
 })
 
