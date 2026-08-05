@@ -1,0 +1,133 @@
+import { beforeEach, describe, expect, it, vi } from "vitest"
+import type { ToolResult } from "../../../src/tools/registry.js"
+
+const mocks = vi.hoisted(() => ({
+  addProductToCart: vi.fn(),
+  removeProductFromCart: vi.fn(),
+  clearCart: vi.fn(),
+  getCart: vi.fn(),
+  initializePicnicClient: vi.fn(),
+}))
+
+vi.mock("../../../src/utils/picnic-client.js", () => ({
+  getPicnicClient: () => ({
+    cart: {
+      addProductToCart: mocks.addProductToCart,
+      removeProductFromCart: mocks.removeProductFromCart,
+      clearCart: mocks.clearCart,
+      getCart: mocks.getCart,
+    },
+    sendRequest: vi.fn(),
+  }),
+  initializePicnicClient: mocks.initializePicnicClient,
+  saveSession: vi.fn(),
+  verifyPicnic2FACode: vi.fn(),
+}))
+
+function parseToolResult(result: ToolResult) {
+  return JSON.parse(result.content[0].text ?? "")
+}
+
+const emptyCart = { type: "ORDER", id: "cart-1", items: [], total_count: 0 }
+
+describe("picnic cart tools", () => {
+  beforeEach(async () => {
+    vi.clearAllMocks()
+    await import("../../../src/tools/picnic-tools.js")
+  })
+
+  describe("mutation failures", () => {
+    // Picnic applies the write and renders the cart in one request, so a failure does not
+    // mean the write was rejected. The error has to say so, or the caller retries and
+    // double-applies the change.
+    it("warns that the cart may have changed when add_to_cart fails", async () => {
+      const { toolRegistry } = await import("../../../src/tools/registry.js")
+      mocks.addProductToCart.mockRejectedValue(
+        new Error("Client version is required to preview the cart page"),
+      )
+
+      await expect(
+        toolRegistry.executeTool("picnic_add_to_cart", { productId: "s1032332", count: 1 }),
+      ).rejects.toThrow(/cart may still have been modified/i)
+    })
+
+    it("points the caller at picnic_get_cart rather than a retry", async () => {
+      const { toolRegistry } = await import("../../../src/tools/registry.js")
+      mocks.removeProductFromCart.mockRejectedValue(new Error("boom"))
+
+      await expect(
+        toolRegistry.executeTool("picnic_remove_from_cart", { productId: "s1", count: 1 }),
+      ).rejects.toThrow(/picnic_get_cart/)
+    })
+
+    it("preserves the upstream error message", async () => {
+      const { toolRegistry } = await import("../../../src/tools/registry.js")
+      mocks.clearCart.mockRejectedValue(new Error("upstream detail"))
+
+      await expect(toolRegistry.executeTool("picnic_clear_cart", {})).rejects.toThrow(
+        /upstream detail/,
+      )
+    })
+  })
+
+  describe("successful mutations", () => {
+    it("returns the filtered cart on success", async () => {
+      const { toolRegistry } = await import("../../../src/tools/registry.js")
+      mocks.addProductToCart.mockResolvedValue(emptyCart)
+
+      const result = await toolRegistry.executeTool("picnic_add_to_cart", {
+        productId: "s1032332",
+        count: 2,
+      })
+
+      expect(mocks.addProductToCart).toHaveBeenCalledWith("s1032332", 2)
+      expect(parseToolResult(result).message).toBe("Added 2 item(s) to cart")
+    })
+
+    it("does not retry the mutation itself", async () => {
+      const { toolRegistry } = await import("../../../src/tools/registry.js")
+      mocks.addProductToCart.mockRejectedValue(new Error("nope"))
+
+      await expect(
+        toolRegistry.executeTool("picnic_add_to_cart", { productId: "s1", count: 1 }),
+      ).rejects.toThrow()
+      expect(mocks.addProductToCart).toHaveBeenCalledTimes(1)
+    })
+  })
+
+  describe("annotations", () => {
+    it("marks cart mutations as non-idempotent and destructive", async () => {
+      const { toolRegistry } = await import("../../../src/tools/registry.js")
+      const list = toolRegistry.getToolsList() as Array<{
+        name: string
+        annotations?: Record<string, boolean>
+      }>
+
+      for (const name of [
+        "picnic_add_to_cart",
+        "picnic_remove_from_cart",
+        "picnic_clear_cart",
+        "picnic_add_recipe_to_cart",
+        "picnic_remove_recipe_from_cart",
+      ]) {
+        const tool = list.find((t) => t.name === name)
+        expect(tool, `${name} should be registered`).toBeDefined()
+        expect(tool?.annotations, `${name} should carry annotations`).toMatchObject({
+          readOnlyHint: false,
+          destructiveHint: true,
+          idempotentHint: false,
+        })
+      }
+    })
+
+    it("leaves read-only tools unannotated", async () => {
+      const { toolRegistry } = await import("../../../src/tools/registry.js")
+      const list = toolRegistry.getToolsList() as Array<{
+        name: string
+        annotations?: Record<string, boolean>
+      }>
+
+      expect(list.find((t) => t.name === "picnic_get_cart")?.annotations).toBeUndefined()
+    })
+  })
+})
