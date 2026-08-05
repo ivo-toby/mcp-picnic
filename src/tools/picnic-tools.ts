@@ -100,8 +100,11 @@ function filterCartData(cart: unknown) {
 
   const filteredItems = cartObj.items?.map((orderLine) => {
     const decorator = (type: string) => orderLine.decorators?.find((d) => d.type === type)
-    // A discounted line otherwise shows only its reduced price, so the saving is visible but
-    // unexplainable — PROMO carries the reason ("15% Rabatt").
+    // The label for this line's own discount ("15% Rabatt"). Note the line `price` below is
+    // the price BEFORE this promotion: Picnic deducts promotions at cart level, so the line
+    // prices sum to more than `total_price`, and the difference is `total_savings`. Several
+    // lines can carry different promotions at once, so `total_savings` is the total across
+    // all of them and must not be attributed to any single label.
     const promotion = decorator("PROMO")?.text
     // BASKET_GROUP holds the selling-group id, i.e. the recipe this line came from — the same
     // id picnic_add_recipe_to_cart takes. Without it there is no way to tell which lines a
@@ -866,7 +869,13 @@ toolRegistry.register({
 // Get shopping cart tool
 toolRegistry.register({
   name: "picnic_get_cart",
-  description: "Get the current shopping cart contents with filtered data",
+  description:
+    "Get the current shopping cart contents. Prices are in cents. An order line's `price` is " +
+    "the amount BEFORE that line's own promotion, so the line prices sum to more than the " +
+    "cart's `total_price`; the difference is `total_savings`. A line's `promotion` label " +
+    "(e.g. '15% Rabatt') applies to that line alone — several lines can carry different " +
+    "promotions, so never describe one line's percentage as applying to the cart, and never " +
+    "attribute all of `total_savings` to a single promotion.",
   inputSchema: z.object({}),
   handler: async () => {
     await ensureClientInitialized()
