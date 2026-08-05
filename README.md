@@ -2,6 +2,8 @@
 
 # MCP Picnic - AI-Powered Grocery Shopping Assistant
 
+[![MCP Toplist](https://mcptoplist.com/badge/glama%2Fivo-toby%2Fmcp-picnic.svg)](https://mcptoplist.com/server/glama%2Fivo-toby%2Fmcp-picnic)
+
 [![smithery badge](https://smithery.ai/badge/@ivo-toby/mcp-picnic)](https://smithery.ai/server/@ivo-toby/mcp-picnic)
 
 An intelligent Model Context Protocol (MCP) server that enables AI assistants to interact with Picnic, the online supermarket delivery service. This server transforms your AI assistant into a smart grocery shopping companion that can help you plan meals, manage your shopping cart, track deliveries, and optimize your grocery shopping experience.
