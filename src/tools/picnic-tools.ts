@@ -88,6 +88,7 @@ function filterCartData(cart: unknown) {
         price?: number
         image_ids?: string[]
         max_count?: number
+        decorators?: Array<{ type?: string; quantity?: number }>
       }>
     }>
     total_count?: number
@@ -104,6 +105,10 @@ function filterCartData(cart: unknown) {
       name: article.name,
       unit: article.unit_quantity,
       price: article.price,
+      // How many of this article are in the cart. Picnic carries it in a QUANTITY decorator
+      // rather than a plain field; without it a caller cannot tell one unit from three, so it
+      // cannot check whether an ambiguous add actually landed (see mutateCart).
+      quantity: article.decorators?.find((d) => d.type === "QUANTITY")?.quantity ?? 1,
       ...(article.image_ids?.length && { image_id: article.image_ids[0] }),
     })),
   }))

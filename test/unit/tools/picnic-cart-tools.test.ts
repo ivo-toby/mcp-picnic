@@ -131,3 +131,55 @@ describe("picnic cart tools", () => {
     })
   })
 })
+
+describe("picnic_get_cart quantities", () => {
+  beforeEach(async () => {
+    vi.clearAllMocks()
+    await import("../../../src/tools/picnic-tools.js")
+  })
+
+  // Without this the caller cannot verify whether an ambiguous add landed once or twice,
+  // which is exactly what the mutation error message tells it to go and check.
+  it("surfaces the QUANTITY decorator as a quantity field", async () => {
+    const { toolRegistry } = await import("../../../src/tools/registry.js")
+    mocks.getCart.mockResolvedValue({
+      type: "ORDER",
+      id: "shopping_cart",
+      total_count: 2,
+      items: [
+        {
+          type: "ORDER_LINE",
+          id: "1871",
+          price: 510,
+          items: [
+            {
+              id: "s1032332",
+              name: "Frosch Cremeseife",
+              unit_quantity: "500ml",
+              price: 255,
+              decorators: [
+                { type: "QUANTITY", quantity: 2 },
+                { type: "UNIT_QUANTITY", unit_quantity_text: "500ml" },
+              ],
+            },
+          ],
+        },
+      ],
+    })
+
+    const cart = parseToolResult(await toolRegistry.executeTool("picnic_get_cart", {}))
+    expect(cart.items[0].articles[0].quantity).toBe(2)
+  })
+
+  it("defaults to 1 when no QUANTITY decorator is present", async () => {
+    const { toolRegistry } = await import("../../../src/tools/registry.js")
+    mocks.getCart.mockResolvedValue({
+      type: "ORDER",
+      id: "shopping_cart",
+      items: [{ id: "1", price: 255, items: [{ id: "s1", name: "x", price: 255 }] }],
+    })
+
+    const cart = parseToolResult(await toolRegistry.executeTool("picnic_get_cart", {}))
+    expect(cart.items[0].articles[0].quantity).toBe(1)
+  })
+})
