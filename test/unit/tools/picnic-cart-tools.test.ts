@@ -171,6 +171,61 @@ describe("picnic_get_cart quantities", () => {
     expect(cart.items[0].articles[0].quantity).toBe(2)
   })
 
+  // A discounted line shows only its reduced price, so without PROMO the saving is visible
+  // but unexplainable.
+  it("surfaces the PROMO decorator as the reason for a discount", async () => {
+    const { toolRegistry } = await import("../../../src/tools/registry.js")
+    mocks.getCart.mockResolvedValue({
+      items: [
+        {
+          id: "1869",
+          display_price: 1272,
+          decorators: [
+            { type: "PROMO", text: "15% Rabatt" },
+            { type: "PRICE", display_price: 1272 },
+          ],
+          items: [{ id: "s1", name: "Durex", price: 749 }],
+        },
+      ],
+      total_savings: 294,
+    })
+
+    const cart = parseToolResult(await toolRegistry.executeTool("picnic_get_cart", {}))
+    expect(cart.items[0].promotion).toBe("15% Rabatt")
+    expect(cart.items[0].price).toBe(1272)
+    expect(cart.total_savings).toBe(294)
+  })
+
+  // BASKET_GROUP is the selling-group id, so it identifies which recipe put this line in the
+  // cart — the id picnic_remove_recipe_from_cart needs to undo it.
+  it("surfaces BASKET_GROUP as the originating recipe id", async () => {
+    const { toolRegistry } = await import("../../../src/tools/registry.js")
+    mocks.getCart.mockResolvedValue({
+      items: [
+        {
+          id: "1870",
+          price: 255,
+          decorators: [{ type: "BASKET_GROUP", id: "6866314281719e5205f82666" }],
+          items: [{ id: "s2", name: "Aubergine", price: 255 }],
+        },
+      ],
+    })
+
+    const cart = parseToolResult(await toolRegistry.executeTool("picnic_get_cart", {}))
+    expect(cart.items[0].recipe_id).toBe("6866314281719e5205f82666")
+  })
+
+  it("omits promotion and recipe_id when the line carries no decorators", async () => {
+    const { toolRegistry } = await import("../../../src/tools/registry.js")
+    mocks.getCart.mockResolvedValue({
+      items: [{ id: "1", price: 169, items: [{ id: "s3", name: "Bananen", price: 169 }] }],
+    })
+
+    const cart = parseToolResult(await toolRegistry.executeTool("picnic_get_cart", {}))
+    expect(cart.items[0]).not.toHaveProperty("promotion")
+    expect(cart.items[0]).not.toHaveProperty("recipe_id")
+  })
+
   it("defaults to 1 when no QUANTITY decorator is present", async () => {
     const { toolRegistry } = await import("../../../src/tools/registry.js")
     mocks.getCart.mockResolvedValue({

@@ -81,6 +81,7 @@ function filterCartData(cart: unknown) {
       id?: string
       display_price?: number
       price?: number
+      decorators?: Array<{ type?: string; text?: string; id?: string }>
       items?: Array<{
         id?: string
         name?: string
@@ -97,21 +98,34 @@ function filterCartData(cart: unknown) {
     total_savings?: number
   }
 
-  const filteredItems = cartObj.items?.map((orderLine) => ({
-    order_line_id: orderLine.id,
-    price: orderLine.display_price || orderLine.price,
-    articles: orderLine.items?.map((article) => ({
-      product_id: article.id,
-      name: article.name,
-      unit: article.unit_quantity,
-      price: article.price,
-      // How many of this article are in the cart. Picnic carries it in a QUANTITY decorator
-      // rather than a plain field; without it a caller cannot tell one unit from three, so it
-      // cannot check whether an ambiguous add actually landed (see mutateCart).
-      quantity: article.decorators?.find((d) => d.type === "QUANTITY")?.quantity ?? 1,
-      ...(article.image_ids?.length && { image_id: article.image_ids[0] }),
-    })),
-  }))
+  const filteredItems = cartObj.items?.map((orderLine) => {
+    const decorator = (type: string) => orderLine.decorators?.find((d) => d.type === type)
+    // A discounted line otherwise shows only its reduced price, so the saving is visible but
+    // unexplainable — PROMO carries the reason ("15% Rabatt").
+    const promotion = decorator("PROMO")?.text
+    // BASKET_GROUP holds the selling-group id, i.e. the recipe this line came from — the same
+    // id picnic_add_recipe_to_cart takes. Without it there is no way to tell which lines a
+    // recipe contributed, and so no way to undo one with picnic_remove_recipe_from_cart.
+    const recipeId = decorator("BASKET_GROUP")?.id
+
+    return {
+      order_line_id: orderLine.id,
+      price: orderLine.display_price || orderLine.price,
+      ...(promotion && { promotion }),
+      ...(recipeId && { recipe_id: recipeId }),
+      articles: orderLine.items?.map((article) => ({
+        product_id: article.id,
+        name: article.name,
+        unit: article.unit_quantity,
+        price: article.price,
+        // How many of this article are in the cart. Picnic carries it in a QUANTITY decorator
+        // rather than a plain field; without it a caller cannot tell one unit from three, so it
+        // cannot check whether an ambiguous add actually landed (see mutateCart).
+        quantity: article.decorators?.find((d) => d.type === "QUANTITY")?.quantity ?? 1,
+        ...(article.image_ids?.length && { image_id: article.image_ids[0] }),
+      })),
+    }
+  })
 
   return {
     type: cartObj.type,
