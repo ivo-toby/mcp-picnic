@@ -34,6 +34,33 @@ export interface ToolResult {
   isError?: boolean
 }
 
+/**
+ * Marker for handlers that emit MCP content blocks directly.
+ *
+ * Every other handler return value is JSON-serialized into a single `text` block, which is
+ * correct for data but destroys binary payloads — an ArrayBuffer stringifies to `{}`. A
+ * handler wrapping its blocks in `mcpContent()` has them passed through to the client
+ * untouched, so an image arrives as renderable image content rather than a JSON string.
+ */
+const MCP_CONTENT = Symbol("mcpContent")
+
+interface McpContentResult {
+  [MCP_CONTENT]: true
+  content: ToolResult["content"]
+}
+
+export function mcpContent(content: ToolResult["content"]): McpContentResult {
+  return { [MCP_CONTENT]: true, content }
+}
+
+function isMcpContent(value: unknown): value is McpContentResult {
+  return (
+    typeof value === "object" &&
+    value !== null &&
+    (value as Record<symbol, unknown>)[MCP_CONTENT] === true
+  )
+}
+
 // Type-erased version for storage
 interface StoredToolDefinition {
   name: string
@@ -123,6 +150,12 @@ class ToolRegistry {
             args: validatedArgs,
           },
         )
+      }
+
+      // Content blocks are already the wire format, so they skip output validation and
+      // JSON formatting rather than being serialized like a data payload.
+      if (isMcpContent(result)) {
+        return { content: result.content }
       }
 
       // Validate output if schema is provided
