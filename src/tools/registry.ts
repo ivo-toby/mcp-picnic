@@ -2,6 +2,18 @@ import { z } from "zod"
 import { zodToJsonSchema } from "zod-to-json-schema"
 import { ToolError, ErrorCode, ErrorUtils } from "../types/errors.js"
 
+/**
+ * MCP tool annotations. Hints for the calling model about a tool's side effects —
+ * most importantly whether it is safe to retry after an ambiguous failure.
+ */
+export interface ToolAnnotations {
+  title?: string
+  readOnlyHint?: boolean
+  destructiveHint?: boolean
+  idempotentHint?: boolean
+  openWorldHint?: boolean
+}
+
 export interface ToolDefinition<TInput = unknown, TOutput = unknown> {
   name: string
   description: string
@@ -9,6 +21,7 @@ export interface ToolDefinition<TInput = unknown, TOutput = unknown> {
   outputSchema?: z.ZodSchema<TOutput>
   handler: (args: TInput) => Promise<TOutput>
   prompts?: string[]
+  annotations?: ToolAnnotations
 }
 
 export interface ToolResult {
@@ -29,6 +42,7 @@ interface StoredToolDefinition {
   outputSchema?: z.ZodSchema<unknown>
   handler: (args: unknown) => Promise<unknown>
   prompts?: string[]
+  annotations?: ToolAnnotations
 }
 
 class ToolRegistry {
@@ -45,6 +59,7 @@ class ToolRegistry {
         name: tool.name,
         description: tool.description,
         inputSchema: zodToJsonSchema(tool.inputSchema),
+        ...(tool.annotations && { annotations: tool.annotations }),
       }
     }
     return definitions
@@ -55,6 +70,7 @@ class ToolRegistry {
       name: tool.name,
       description: tool.description,
       inputSchema: zodToJsonSchema(tool.inputSchema),
+      ...(tool.annotations && { annotations: tool.annotations }),
     }))
   }
 

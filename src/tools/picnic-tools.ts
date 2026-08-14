@@ -39,6 +39,37 @@ async function ensureClientInitialized() {
   }
 }
 
+/**
+ * Runs a cart mutation, converting failures into an explicitly ambiguous error.
+ *
+ * Picnic applies the mutation and renders the updated cart in the same request, so a
+ * non-2xx response does not mean the write was rejected — it may already have landed and
+ * only the render failed. A caller that reads such an error as "nothing happened" will
+ * retry, and each retry applies the change again. Say so instead of reporting a clean
+ * failure, and point the caller at a read rather than a retry.
+ */
+async function mutateCart<T>(action: string, mutation: () => Promise<T>): Promise<T> {
+  try {
+    return await mutation()
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error)
+    throw new Error(
+      `${action} failed: ${message}. The cart may still have been modified — ` +
+        `call picnic_get_cart to check the current contents before retrying, ` +
+        `because retrying can apply the change a second time.`,
+    )
+  }
+}
+
+// Annotations shared by every tool that mutates cart contents. Tells the calling model the
+// operation is not safe to blindly retry (see mutateCart above).
+const CART_MUTATION_ANNOTATIONS = {
+  readOnlyHint: false,
+  destructiveHint: true,
+  idempotentHint: false,
+  openWorldHint: true,
+} as const
+
 // Helper function to filter cart data for LLM consumption
 function filterCartData(cart: unknown) {
   if (!cart || typeof cart !== "object") return cart
@@ -57,6 +88,7 @@ function filterCartData(cart: unknown) {
         price?: number
         image_ids?: string[]
         max_count?: number
+        decorators?: Array<{ type?: string; quantity?: number }>
       }>
     }>
     total_count?: number
@@ -73,6 +105,10 @@ function filterCartData(cart: unknown) {
       name: article.name,
       unit: article.unit_quantity,
       price: article.price,
+      // How many of this article are in the cart. Picnic carries it in a QUANTITY decorator
+      // rather than a plain field; without it a caller cannot tell one unit from three, so it
+      // cannot check whether an ambiguous add actually landed (see mutateCart).
+      quantity: article.decorators?.find((d) => d.type === "QUANTITY")?.quantity ?? 1,
       ...(article.image_ids?.length && { image_id: article.image_ids[0] }),
     })),
   }))
@@ -645,19 +681,18 @@ toolRegistry.register({
   name: "picnic_add_recipe_to_cart",
   description:
     "Add a recipe's ingredients to the shopping cart by assigning the recipe (selling group) " +
-    "to the basket. Optionally set the number of portions.",
+    "to the basket. Optionally set the number of portions. If this fails, call picnic_get_cart " +
+    "to check whether the ingredients landed before retrying.",
   inputSchema: addRecipeToCartInputSchema,
+  annotations: CART_MUTATION_ANNOTATIONS,
   handler: async (args) => {
     await ensureClientInitialized()
     const client = getPicnicClient()
     const recipeId = await resolveRecipeId(args.recipe_url_or_id)
     const payload: { selling_group_id: string; portions?: number } = { selling_group_id: recipeId }
     if (args.portions !== undefined) payload.portions = args.portions
-    await client.sendRequest(
-      "POST",
-      "/pages/task/assign-selling-group-to-basket",
-      { payload },
-      true,
+    await mutateCart("Adding the recipe to the cart", () =>
+      client.sendRequest("POST", "/pages/task/assign-selling-group-to-basket", { payload }, true),
     )
     return {
       message: "Recipe added to cart",
@@ -674,15 +709,18 @@ toolRegistry.register({
     "Remove a recipe (selling group) from the basket, undoing picnic_add_recipe_to_cart. " +
     "Removes only that recipe's ingredients, leaving the rest of the cart untouched.",
   inputSchema: recipeRefInputSchema,
+  annotations: CART_MUTATION_ANNOTATIONS,
   handler: async (args) => {
     await ensureClientInitialized()
     const client = getPicnicClient()
     const recipeId = await resolveRecipeId(args.recipe_url_or_id)
-    await client.sendRequest(
-      "POST",
-      "/pages/task/remove-selling-group-from-basket",
-      { payload: { selling_group_id: recipeId } },
-      true,
+    await mutateCart("Removing the recipe from the cart", () =>
+      client.sendRequest(
+        "POST",
+        "/pages/task/remove-selling-group-from-basket",
+        { payload: { selling_group_id: recipeId } },
+        true,
+      ),
     )
     return { message: "Recipe removed from cart", recipeId }
   },
@@ -832,12 +870,17 @@ const addToCartInputSchema = z.object({
 
 toolRegistry.register({
   name: "picnic_add_to_cart",
-  description: "Add a product to the shopping cart",
+  description:
+    "Add a product to the shopping cart. Not idempotent: each call adds another `count` " +
+    "items. If this fails, call picnic_get_cart to check whether the add landed before retrying.",
   inputSchema: addToCartInputSchema,
+  annotations: CART_MUTATION_ANNOTATIONS,
   handler: async (args) => {
     await ensureClientInitialized()
     const client = getPicnicClient()
-    const cart = await client.cart.addProductToCart(args.productId, args.count)
+    const cart = await mutateCart(`Adding ${args.count} item(s) to cart`, () =>
+      client.cart.addProductToCart(args.productId, args.count),
+    )
     return {
       message: `Added ${args.count} item(s) to cart`,
       cart: filterCartData(cart),
@@ -853,12 +896,18 @@ const removeFromCartInputSchema = z.object({
 
 toolRegistry.register({
   name: "picnic_remove_from_cart",
-  description: "Remove a product from the shopping cart",
+  description:
+    "Remove a product from the shopping cart. Not idempotent: each call removes another " +
+    "`count` items. If this fails, call picnic_get_cart to check whether the removal landed " +
+    "before retrying.",
   inputSchema: removeFromCartInputSchema,
+  annotations: CART_MUTATION_ANNOTATIONS,
   handler: async (args) => {
     await ensureClientInitialized()
     const client = getPicnicClient()
-    const cart = await client.cart.removeProductFromCart(args.productId, args.count)
+    const cart = await mutateCart(`Removing ${args.count} item(s) from cart`, () =>
+      client.cart.removeProductFromCart(args.productId, args.count),
+    )
     return {
       message: `Removed ${args.count} item(s) from cart`,
       cart: filterCartData(cart),
@@ -871,10 +920,11 @@ toolRegistry.register({
   name: "picnic_clear_cart",
   description: "Clear all items from the shopping cart",
   inputSchema: z.object({}),
+  annotations: CART_MUTATION_ANNOTATIONS,
   handler: async () => {
     await ensureClientInitialized()
     const client = getPicnicClient()
-    const cart = await client.cart.clearCart()
+    const cart = await mutateCart("Clearing the cart", () => client.cart.clearCart())
     return {
       message: "Shopping cart cleared",
       cart: filterCartData(cart),
