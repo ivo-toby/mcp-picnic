@@ -5,19 +5,23 @@ import { resolveDeviceId } from "./device-id.js"
 
 // Singleton instance for caching
 let picnicClientInstance: InstanceType<typeof PicnicClient> | null = null
-const DEFAULT_PICNIC_AGENT = "30100;1.15.232-15154"
 
 type PicnicCountryCode = "NL" | "DE" | "FR"
 type PicnicClientOptions = NonNullable<ConstructorParameters<typeof PicnicClient>[0]> &
   Record<string, unknown>
 
-function buildPicnicHeaders(authKey: string | null, deviceId: string): HeadersInit {
+/**
+ * Headers for the hand-rolled 2FA verify request.
+ *
+ * Sourced from the client instance rather than redeclared here: Picnic gates several
+ * endpoints on the `x-picnic-agent` client version, so a local copy that drifts behind
+ * picnic-api's default silently breaks those calls. Reading the live values keeps this
+ * request identical to every request the library sends.
+ */
+function buildPicnicHeaders(client: InstanceType<typeof PicnicClient>): HeadersInit {
   return {
-    "User-Agent": "okhttp/3.12.2",
-    "Content-Type": "application/json; charset=UTF-8",
-    ...(authKey && { "x-picnic-auth": authKey }),
-    "x-picnic-agent": config.PICNIC_AGENT ?? DEFAULT_PICNIC_AGENT,
-    "x-picnic-did": deviceId,
+    ...client.baseHeaders,
+    ...client.picnicHeaders,
   }
 }
 
@@ -86,12 +90,11 @@ export async function verifyPicnic2FACode(
   const client = getPicnicClient()
   const controller = new AbortController()
   const timeout = setTimeout(() => controller.abort(), timeoutMs)
-  const deviceId = await resolveDeviceId()
 
   try {
     const response = await fetch(`${client.url}/user/2fa/verify`, {
       method: "POST",
-      headers: new Headers(buildPicnicHeaders(client.authKey, deviceId)),
+      headers: new Headers(buildPicnicHeaders(client)),
       body: JSON.stringify({ otp: code }),
       signal: controller.signal,
     })
