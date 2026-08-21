@@ -101,7 +101,7 @@ describe("promotions tools", () => {
     vi.clearAllMocks()
   })
 
-  it("fetches weekly Picnic promotions from the all-promos page", async () => {
+  it("fetches weekly Picnic promotions from the current promotions page", async () => {
     const firstTile = promoTile({
       productId: "s100",
       promotionId: "promo-1",
@@ -137,7 +137,7 @@ describe("promotions tools", () => {
 
     expect(mocks.sendRequest).toHaveBeenCalledWith(
       "GET",
-      "/pages/promo-page-all-promos-redirect",
+      "/pages/promo-page-root",
       null,
       true,
     )

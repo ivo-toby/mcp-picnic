@@ -305,7 +305,7 @@ toolRegistry.register({
     const client = getPicnicClient()
     const page = await client.sendRequest(
       "GET",
-      "/pages/promo-page-all-promos-redirect",
+      "/pages/promo-page-root",
       null,
       true,
     )
@@ -317,8 +317,8 @@ toolRegistry.register({
 
     return {
       source: {
-        pageId: "promo-page-all-promos-redirect",
-        endpoint: "/pages/promo-page-all-promos-redirect",
+        pageId: "promo-page-root",
+        endpoint: "/pages/promo-page-root",
       },
       promotions,
       pagination: {
