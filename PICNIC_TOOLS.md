@@ -38,7 +38,7 @@ Search for products in Picnic.
 
 #### `picnic_get_promotions`
 
-Get Picnic's current weekly promotions/deals from the app's "Alle acties" page.
+Get Picnic's current weekly promotions/deals from the app's promotions page. If the legacy all-promos redirect is unavailable, the tool uses the promotions overview (`promo-page-root`). The returned `source` identifies the page used; pagination counts products extracted from that page, not necessarily every product in linked offer groups.
 
 **Parameters:**
 

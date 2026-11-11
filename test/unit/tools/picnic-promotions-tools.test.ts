@@ -98,7 +98,7 @@ async function loadTools() {
 
 describe("promotions tools", () => {
   beforeEach(() => {
-    vi.clearAllMocks()
+    vi.resetAllMocks()
   })
 
   it("fetches weekly Picnic promotions from the all-promos page", async () => {
@@ -222,5 +222,79 @@ describe("promotions tools", () => {
       total: 3,
       hasMore: true,
     })
+  })
+
+  it("falls back to the promotions root when the legacy redirect is missing", async () => {
+    const tile = promoTile({
+      productId: "s100",
+      promotionId: "promo-1",
+      name: "Bio Mozzarella",
+      label: "25% Rabatt",
+      price: 111,
+      originalPrice: 149,
+    })
+    mocks.sendRequest
+      .mockRejectedValueOnce(
+        new Error("page with id 'promo-page-all-promos-redirect' was not found"),
+      )
+      .mockResolvedValueOnce({ body: [tile, tile, regularTile()] })
+    const registry = await loadTools()
+    const payload = parseToolResult(
+      await registry.executeTool("picnic_get_promotions", { limit: 1 }),
+    )
+    expect(mocks.sendRequest).toHaveBeenNthCalledWith(
+      2,
+      "GET",
+      "/pages/promo-page-root",
+      null,
+      true,
+    )
+    expect(payload.source).toEqual({
+      pageId: "promo-page-root",
+      endpoint: "/pages/promo-page-root",
+    })
+    expect(payload.promotions).toEqual([
+      expect.objectContaining({ product_id: "s100", price: 111, original_price: 149 }),
+    ])
+    expect(payload.pagination).toEqual({
+      offset: 0,
+      limit: 1,
+      returned: 1,
+      total: 1,
+      hasMore: false,
+    })
+    expect(mocks.sendRequest).toHaveBeenCalledTimes(2)
+  })
+
+  it.each(["Unauthorized", "fetch failed", "Internal Server Error", "Not Found"])(
+    "does not hide unrelated failures: %s",
+    async (message) => {
+      mocks.sendRequest.mockRejectedValue(new Error(message))
+      const registry = await loadTools()
+      await expect(registry.executeTool("picnic_get_promotions", {})).rejects.toThrow(message)
+      expect(mocks.sendRequest).toHaveBeenCalledTimes(1)
+    },
+  )
+
+  it("propagates a failure from the fallback page", async () => {
+    mocks.sendRequest
+      .mockRejectedValueOnce(
+        new Error("page with id 'promo-page-all-promos-redirect' was not found"),
+      )
+      .mockRejectedValueOnce(new Error("page with id 'promo-page-root' was not found"))
+    const registry = await loadTools()
+    await expect(registry.executeTool("picnic_get_promotions", {})).rejects.toThrow(
+      "page with id 'promo-page-root' was not found",
+    )
+    expect(mocks.sendRequest).toHaveBeenCalledTimes(2)
+  })
+
+  it("does not fall back for an empty but valid legacy page", async () => {
+    mocks.sendRequest.mockResolvedValue({ body: [] })
+    const registry = await loadTools()
+    const payload = parseToolResult(await registry.executeTool("picnic_get_promotions", {}))
+    expect(payload.promotions).toEqual([])
+    expect(payload.source.pageId).toBe("promo-page-all-promos-redirect")
+    expect(mocks.sendRequest).toHaveBeenCalledTimes(1)
   })
 })

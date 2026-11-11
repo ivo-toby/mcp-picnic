@@ -296,19 +296,28 @@ const promotionsInputSchema = z.object({
 toolRegistry.register({
   name: "picnic_get_promotions",
   description:
-    "Get Picnic's current weekly promotions/deals from the app's 'Alle acties' page. " +
+    "Get Picnic's current weekly promotions/deals from the app's promotions page. " +
     "Returns promoted products with current price, promotion label, original price when shown, " +
     "and pagination.",
   inputSchema: promotionsInputSchema,
   handler: async (args) => {
     await ensureClientInitialized()
     const client = getPicnicClient()
-    const page = await client.sendRequest(
-      "GET",
-      "/pages/promo-page-all-promos-redirect",
-      null,
-      true,
-    )
+    let pageId = "promo-page-all-promos-redirect"
+    let page: unknown
+    try {
+      page = await client.sendRequest("GET", `/pages/${pageId}`, null, true)
+    } catch (error) {
+      // Some storefronts (observed in DE) no longer expose the all-promos redirect.
+      // Their home page links directly to promo-page-root instead. Only fall back
+      // for this specific missing page, not authentication/network/server errors.
+      // picnic-api currently exposes the API message without an HTTP status.
+      if (!(error instanceof Error) || error.message !== `page with id '${pageId}' was not found`) {
+        throw error
+      }
+      pageId = "promo-page-root"
+      page = await client.sendRequest("GET", `/pages/${pageId}`, null, true)
+    }
     const allPromotions = extractPromotionsFromPage(page)
 
     const startIndex = args.offset ?? 0
@@ -317,8 +326,8 @@ toolRegistry.register({
 
     return {
       source: {
-        pageId: "promo-page-all-promos-redirect",
-        endpoint: "/pages/promo-page-all-promos-redirect",
+        pageId,
+        endpoint: `/pages/${pageId}`,
       },
       promotions,
       pagination: {
