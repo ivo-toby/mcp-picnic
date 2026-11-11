@@ -511,6 +511,47 @@ describe("createRateLimitMiddleware", () => {
     })
   })
 
+  describe("skipPaths", () => {
+    it("should not count or limit requests to skipped paths", () => {
+      const { middleware, limiter } = createRateLimitMiddleware({
+        windowMs: 60000,
+        maxRequests: 1,
+        skipPaths: ["/health"],
+      })
+
+      for (const path of ["/health", "/health/", "/HEALTH"]) {
+        middleware({ ...mockReq, path }, mockRes, mockNext)
+      }
+
+      expect(mockNext).toHaveBeenCalledTimes(3)
+      expect(mockRes.set).not.toHaveBeenCalled()
+      expect(limiter.getStatus("127.0.0.1")).toBeNull()
+
+      // The MCP endpoint still has its full quota
+      middleware({ ...mockReq, path: "/mcp" }, mockRes, mockNext)
+      expect(mockRes.status).not.toHaveBeenCalled()
+      middleware({ ...mockReq, path: "/mcp" }, mockRes, mockNext)
+      expect(mockRes.status).toHaveBeenCalledWith(429)
+
+      limiter.destroy()
+    })
+
+    it("should only skip exact path matches", () => {
+      const { middleware, limiter } = createRateLimitMiddleware({
+        windowMs: 60000,
+        maxRequests: 10,
+        skipPaths: ["/health"],
+      })
+
+      middleware({ ...mockReq, path: "/healthz" }, mockRes, mockNext)
+      middleware({ ...mockReq, path: "/health/details" }, mockRes, mockNext)
+
+      expect(limiter.getStatus("127.0.0.1")?.count).toBe(2)
+
+      limiter.destroy()
+    })
+  })
+
   describe("edge cases", () => {
     it("should handle connection.remoteAddress fallback", () => {
       const config: RateLimitConfig = {
