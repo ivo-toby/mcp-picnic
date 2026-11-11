@@ -5,6 +5,7 @@ import {
   StreamableHttpServerOptions,
 } from "../../../src/transports/streamable-http"
 import { createMCPServer } from "../../../src/utils/server-factory"
+import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/streamableHttp.js"
 
 // Mock dependencies
 vi.mock("../../../src/utils/server-factory")
@@ -216,10 +217,220 @@ describe("StreamableHttpServer", () => {
       })
 
     await expect(Promise.all([checkHealth(), checkHealth(), checkHealth()])).resolves.toEqual([
-      200,
-      200,
-      200,
+      200, 200, 200,
     ])
+  })
+
+  describe("rate limit identity", () => {
+    const get = (port: number, headers: Record<string, string> = {}) =>
+      new Promise<number>((resolve, reject) => {
+        const req = http.request(
+          { hostname: "127.0.0.1", port, path: "/sessions", method: "GET", headers },
+          (response) => {
+            response.resume()
+            response.on("end", () => resolve(response.statusCode!))
+          },
+        )
+        req.on("error", reject)
+        req.end()
+      })
+
+    const startServer = async (options: StreamableHttpServerOptions) => {
+      vi.useRealTimers()
+      server = new StreamableHttpServer({ port: 0, enableRequestLogging: false, ...options })
+      await server.start()
+      // @ts-expect-error - private property access
+      return ((server.server as http.Server).address() as { port: number }).port
+    }
+
+    /**
+     * Spend the client IP's own bucket with one session-less request and return the IP the
+     * server saw (IPv4 or IPv4-mapped IPv6, depending on how the socket was bound).
+     */
+    const spendIpBucket = async (port: number, headers: Record<string, string> = {}) => {
+      expect(await get(port, headers)).toBe(200)
+      // @ts-expect-error - private property access
+      const keys = [...server.rateLimiter.ipLimiter["store"].keys()] as string[]
+      return keys[0].replace(/^ip:/, "")
+    }
+
+    const registerSession = (id: string, clientIp: string) => {
+      // The SDK mock can't run a real initialize handshake, so register the session directly.
+      // @ts-expect-error - private property access
+      server.transports[id] = { ...mockTransport }
+      // @ts-expect-error - private property access
+      server.sessionClientIps.set(id, clientIp)
+    }
+
+    it("should limit live sessions separately from their client IP", async () => {
+      const port = await startServer({ rateLimitConfig: { windowMs: 60000, maxRequests: 1 } })
+      registerSession("test-session-id", await spendIpBucket(port))
+
+      expect(await get(port, { "mcp-session-id": "test-session-id" })).toBe(200)
+      expect(await get(port)).toBe(429)
+      expect(await get(port, { "mcp-session-id": "unknown-session" })).toBe(429)
+      expect(await get(port, { "mcp-session-id": "test-session-id" })).toBe(429)
+    })
+
+    /** Make the SDK mock initialize the session while handling the request, like the real SDK. */
+    const mockInitializingTransport = () =>
+      vi.mocked(StreamableHTTPServerTransport).mockImplementationOnce((options: any) => {
+        const transport: any = {
+          sessionId: undefined,
+          close: vi.fn().mockResolvedValue(undefined),
+          handleRequest: vi.fn(async (_req: any, res: any) => {
+            transport.sessionId = options.sessionIdGenerator()
+            options.onsessioninitialized(transport.sessionId)
+            res.status(200).json({ jsonrpc: "2.0", id: 1, result: {} })
+          }),
+        }
+        return transport
+      })
+
+    const postInitialize = (port: number, headers: Record<string, string> = {}) =>
+      new Promise<number>((resolve, reject) => {
+        const req = http.request(
+          {
+            hostname: "127.0.0.1",
+            port,
+            path: "/mcp",
+            method: "POST",
+            headers: {
+              "Content-Type": "application/json",
+              Accept: "application/json, text/event-stream",
+              ...headers,
+            },
+          },
+          (response) => {
+            response.resume()
+            response.on("end", () => resolve(response.statusCode!))
+          },
+        )
+        req.on("error", reject)
+        req.end(
+          JSON.stringify({
+            jsonrpc: "2.0",
+            id: 1,
+            method: "initialize",
+            params: {
+              protocolVersion: "2025-06-18",
+              capabilities: {},
+              clientInfo: { name: "test", version: "1.0.0" },
+            },
+          }),
+        )
+      })
+
+    it("should bind a session created via initialize to the caller's IP", async () => {
+      mockInitializingTransport()
+      const port = await startServer({ rateLimitConfig: { windowMs: 60000, maxRequests: 2 } })
+
+      expect(await postInitialize(port)).toBe(200)
+      // @ts-expect-error - private property access
+      expect(server.sessionClientIps.get("test-session-id")).toBe("127.0.0.1")
+
+      // A follow-up request on that session lands in the session's bucket.
+      expect(await get(port, { "mcp-session-id": "test-session-id" })).toBe(200)
+      // @ts-expect-error - private property access
+      expect(server.rateLimiter.limiter.getStatus("session:test-session-id")?.count).toBe(1)
+    })
+
+    it("should keep initialize IP-limited when it carries a live session ID", async () => {
+      const port = await startServer({ rateLimitConfig: { windowMs: 60000, maxRequests: 1 } })
+      registerSession("existing-session", await spendIpBucket(port))
+      vi.mocked(StreamableHTTPServerTransport).mockClear()
+
+      // The session bucket has quota, but the IP bucket that pays for new sessions is spent.
+      // @ts-expect-error - private property access
+      const { limiter, ipLimiter } = server.rateLimiter
+      const ip = (ipLimiter["store"].keys().next().value as string).replace(/^ip:/, "")
+      const aggregateBefore = ipLimiter.getStatus(`ip:${ip}`)?.count
+
+      expect(await postInitialize(port, { "mcp-session-id": "existing-session" })).toBe(429)
+      expect(StreamableHTTPServerTransport).not.toHaveBeenCalled()
+      expect(server.getActiveSessions()).toEqual(["existing-session"])
+
+      // The rejected initialize is refunded: it consumes neither the session nor the per-IP total.
+      expect(limiter.getStatus("session:existing-session")?.count).toBe(0)
+      expect(ipLimiter.getStatus(`ip:${ip}`)?.count).toBe(aggregateBefore)
+    })
+
+    it("should charge both buckets for initialize sent with a live session ID", async () => {
+      mockInitializingTransport()
+      const port = await startServer({ rateLimitConfig: { windowMs: 60000, maxRequests: 5 } })
+      const ip = await spendIpBucket(port)
+      registerSession("existing-session", ip)
+
+      expect(await postInitialize(port, { "mcp-session-id": "existing-session" })).toBe(200)
+      // @ts-expect-error - private property access
+      const { limiter } = server.rateLimiter
+      expect(limiter.getStatus("session:existing-session")?.count).toBe(1)
+      expect(limiter.getStatus(`ip:${ip}`)?.count).toBe(2)
+    })
+
+    it("should not charge a session for requests from another client IP", async () => {
+      const port = await startServer({ rateLimitConfig: { windowMs: 60000, maxRequests: 1 } })
+      await spendIpBucket(port)
+      registerSession("test-session-id", "203.0.113.7")
+
+      // Same session ID, different IP: falls back to the (spent) IP bucket.
+      expect(await get(port, { "mcp-session-id": "test-session-id" })).toBe(429)
+      // @ts-expect-error - private property access
+      expect(server.rateLimiter.limiter.getStatus("session:test-session-id")).toBeNull()
+    })
+
+    it("should not charge a session for unauthenticated requests", async () => {
+      const port = await startServer({
+        authToken: "secret",
+        rateLimitConfig: { windowMs: 60000, maxRequests: 1 },
+      })
+      registerSession("test-session-id", await spendIpBucket(port, { "x-mcp-token": "secret" }))
+
+      // No token: limited on the (spent) IP bucket, never reaching the session bucket.
+      expect(await get(port, { "mcp-session-id": "test-session-id" })).toBe(429)
+      // @ts-expect-error - private property access
+      expect(server.rateLimiter.limiter.getStatus("session:test-session-id")).toBeNull()
+
+      // The session owner still has its full quota.
+      expect(
+        await get(port, { "mcp-session-id": "test-session-id", "x-mcp-token": "secret" }),
+      ).toBe(200)
+    })
+
+    it("should forget a session's client IP when the session ends", async () => {
+      const port = await startServer({ rateLimitConfig: { windowMs: 60000, maxRequests: 1 } })
+      registerSession("test-session-id", await spendIpBucket(port))
+      server.cleanupSession("test-session-id")
+
+      // @ts-expect-error - private property access
+      expect(server.sessionClientIps.has("test-session-id")).toBe(false)
+    })
+
+    it("should key on X-Forwarded-For when trustProxy is set", async () => {
+      const port = await startServer({
+        trustProxy: "loopback",
+        rateLimitConfig: { windowMs: 60000, maxRequests: 1 },
+      })
+
+      expect(await get(port, { "X-Forwarded-For": "100.64.0.1" })).toBe(200)
+      expect(await get(port, { "X-Forwarded-For": "100.64.0.2" })).toBe(200)
+      expect(await get(port, { "X-Forwarded-For": "100.64.0.1" })).toBe(429)
+    })
+
+    it("should ignore X-Forwarded-For when trustProxy is not set", async () => {
+      const port = await startServer({ rateLimitConfig: { windowMs: 60000, maxRequests: 1 } })
+
+      expect(await get(port, { "X-Forwarded-For": "100.64.0.1" })).toBe(200)
+      expect(await get(port, { "X-Forwarded-For": "100.64.0.2" })).toBe(429)
+    })
+  })
+
+  it("should not resolve Object.prototype members as sessions", () => {
+    server = new StreamableHttpServer({ port: 0, enableRequestLogging: false })
+
+    expect(server.getTransport("constructor")).toBeUndefined()
+    expect(server.getTransport("__proto__")).toBeUndefined()
+    expect(() => server.cleanupSession("constructor")).not.toThrow()
   })
 
   it("should setup routes", async () => {

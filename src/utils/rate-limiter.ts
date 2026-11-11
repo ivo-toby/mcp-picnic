@@ -8,6 +8,17 @@ export interface RateLimitConfig {
   skipSuccessfulRequests?: boolean // Don't count successful requests
   skipFailedRequests?: boolean // Don't count failed requests
   keyGenerator?: (identifier: string) => string // Custom key generation
+  /**
+   * Returns the MCP session ID to rate-limit this request under, or `undefined` to limit it by
+   * client IP. Callers decide when a session bucket is legitimate (live session, authenticated,
+   * same client that created it), so a request can't be charged to someone else's session.
+   */
+  resolveSessionId?: (req: ANNIE) => string | undefined
+  /**
+   * Ceiling on all requests from one client IP across its sessions, so a client can't multiply
+   * its quota by opening sessions. Defaults to 10x `maxRequests`.
+   */
+  maxRequestsPerIp?: number
 }
 
 interface RateLimitEntry {
@@ -18,7 +29,7 @@ interface RateLimitEntry {
 
 export class RateLimiter {
   private store = new Map<string, RateLimitEntry>()
-  private config: Required<RateLimitConfig>
+  private config: Required<Omit<RateLimitConfig, "resolveSessionId" | "maxRequestsPerIp">>
   private cleanupInterval: NodeJS.Timeout
 
   constructor(config: RateLimitConfig) {
@@ -34,6 +45,8 @@ export class RateLimiter {
     this.cleanupInterval = setInterval(() => {
       this.cleanup()
     }, 60000)
+    // Don't keep the process alive just for cleanup.
+    this.cleanupInterval.unref?.()
   }
 
   /**
@@ -86,6 +99,24 @@ export class RateLimiter {
       allowed: true,
       remaining: this.config.maxRequests - entry.count,
       resetTime: entry.resetTime,
+    }
+  }
+
+  /**
+   * True when a request for this identifier would currently be allowed, without counting it.
+   */
+  wouldAllow(identifier: string): boolean {
+    const entry = this.store.get(this.config.keyGenerator(identifier))
+    return !entry || Date.now() >= entry.resetTime || entry.count < this.config.maxRequests
+  }
+
+  /**
+   * Undo one counted request in the current window, for requests rejected after being counted.
+   */
+  refund(identifier: string): void {
+    const entry = this.store.get(this.config.keyGenerator(identifier))
+    if (entry && Date.now() < entry.resetTime && entry.count > 0) {
+      entry.count--
     }
   }
 
@@ -207,11 +238,52 @@ function normalizePath(path: string): string {
 }
 
 /**
- * Express middleware factory for rate limiting
+ * Normalize an IP so IPv4-mapped IPv6 (`::ffff:10.0.0.1`) and plain IPv4 (`10.0.0.1`) match.
+ */
+export function normalizeIp(ip: string): string {
+  return ip.toLowerCase().startsWith("::ffff:") && ip.includes(".") ? ip.slice(7) : ip
+}
+
+/** Client IP for a request; `req.ip` honours Express `trust proxy`. */
+function clientIp(req: ANNIE): string {
+  const ip = req.ip || req.connection?.remoteAddress
+  return typeof ip === "string" && ip.length > 0 ? normalizeIp(ip) : "unknown"
+}
+
+/**
+ * Express middleware factory for rate limiting.
+ *
+ * Each request counts against a `maxRequests` bucket: its session's when `resolveSessionId`
+ * returns one, otherwise its client IP's. Admitted requests also count against the IP's
+ * aggregate bucket (`maxRequestsPerIp`); rejected ones don't, so one client retrying on 429
+ * can't lock out other clients sharing its IP.
  */
 export function createRateLimitMiddleware(config: RateLimitConfig) {
   const limiter = new RateLimiter(config)
+  const maxRequestsPerIp = config.maxRequestsPerIp ?? config.maxRequests * 10
+  const ipLimiter = new RateLimiter({ windowMs: config.windowMs, maxRequests: maxRequestsPerIp })
   const skipPaths = new Set((config.skipPaths ?? []).map(normalizePath))
+
+  const reject = (res: ANNIE, limit: number, resetTime?: number) => {
+    const retryAfter = resetTime ? Math.ceil((resetTime - Date.now()) / 1000) : 60
+    res.set({
+      "X-RateLimit-Limit": limit.toString(),
+      "X-RateLimit-Remaining": "0",
+      "X-RateLimit-Reset": resetTime ? Math.ceil(resetTime / 1000).toString() : "",
+    })
+    res.set("Retry-After", retryAfter.toString())
+
+    const error = new TransportError(ErrorCode.TRANSPORT_RATE_LIMITED, "Too many requests", {
+      retryAfter,
+      resetTime,
+    })
+
+    return res.status(429).json({
+      jsonrpc: "2.0",
+      error: error.toMCPError(),
+      id: null,
+    })
+  }
 
   return {
     middleware: (req: ANNIE, res: ANNIE, next: ANNIE) => {
@@ -223,35 +295,55 @@ export function createRateLimitMiddleware(config: RateLimitConfig) {
         return next()
       }
 
-      // Use IP address as default identifier, but allow custom extraction
-      const identifier = req.ip || req.connection.remoteAddress || "unknown"
-      const result = limiter.checkLimit(identifier)
+      // Namespaced keys, so a spoofed IP (e.g. via `trust proxy = true`) can't collide with
+      // a session bucket.
+      const ipKey = `ip:${clientIp(req)}`
+      if (!ipLimiter.wouldAllow(ipKey)) {
+        return reject(res, maxRequestsPerIp, ipLimiter.getStatus(ipKey)?.resetTime)
+      }
 
-      // Add rate limit headers
+      const sessionId = config.resolveSessionId?.(req)
+      const result = limiter.checkLimit(sessionId ? `session:${sessionId}` : ipKey)
+      if (!result.allowed) {
+        return reject(res, config.maxRequests, result.resetTime)
+      }
+      ipLimiter.checkLimit(ipKey)
+      if (sessionId) {
+        // Lets handlers tell this request was charged to a session, not its IP.
+        res.locals = res.locals ?? {}
+        res.locals.rateLimitSessionId = sessionId
+      }
+
       res.set({
         "X-RateLimit-Limit": config.maxRequests.toString(),
         "X-RateLimit-Remaining": (result.remaining || 0).toString(),
         "X-RateLimit-Reset": result.resetTime ? Math.ceil(result.resetTime / 1000).toString() : "",
       })
 
-      if (!result.allowed) {
-        const retryAfter = result.resetTime ? Math.ceil((result.resetTime - Date.now()) / 1000) : 60
-        res.set("Retry-After", retryAfter.toString())
-
-        const error = new TransportError(ErrorCode.TRANSPORT_RATE_LIMITED, "Too many requests", {
-          retryAfter,
-          resetTime: result.resetTime,
-        })
-
-        return res.status(429).json({
-          jsonrpc: "2.0",
-          error: error.toMCPError(),
-          id: null,
-        })
-      }
-
       next()
     },
+    /**
+     * Also charge a request to its client IP's own bucket, sending 429 when that bucket is
+     * spent. For requests the middleware already charged to a session bucket but that must stay
+     * IP-limited, such as `initialize`: otherwise each new session's bucket could pay for
+     * creating the next one. Returns false when a 429 was sent; the session and per-IP total
+     * charges the middleware made are then refunded, since rejected requests don't count.
+     */
+    enforceIpLimit: (req: ANNIE, res: ANNIE): boolean => {
+      const ipKey = `ip:${clientIp(req)}`
+      const result = limiter.checkLimit(ipKey)
+      if (!result.allowed) {
+        const sessionId = res.locals?.rateLimitSessionId
+        if (sessionId) {
+          limiter.refund(`session:${sessionId}`)
+        }
+        ipLimiter.refund(ipKey)
+        reject(res, config.maxRequests, result.resetTime)
+        return false
+      }
+      return true
+    },
     limiter,
+    ipLimiter,
   }
 }
