@@ -23,6 +23,7 @@ async function runServer() {
       rateLimitConfig: {
         windowMs: config.HTTP_RATE_LIMIT_WINDOW_MS,
         maxRequests: config.HTTP_RATE_LIMIT_MAX_REQUESTS,
+        maxRequestsPerIp: config.HTTP_RATE_LIMIT_MAX_REQUESTS_PER_IP,
         skipPaths: config.HTTP_RATE_LIMIT_SKIP_PATHS,
       },
     })

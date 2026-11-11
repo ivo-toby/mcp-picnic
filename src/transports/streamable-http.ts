@@ -43,6 +43,8 @@ export class StreamableHttpServer extends BaseTransportServer {
   private rateLimiter?: ReturnType<typeof createRateLimitMiddleware>
   private transports: Record<string, StreamableHTTPServerTransport> = {}
   private sessionTimeouts = new Map<string, NodeJS.Timeout>()
+  /** Client IP that created each session, used to bind session rate-limit buckets. */
+  private sessionClientIps = new Map<string, string>()
 
   /**
    * Create a new HTTP server for MCP over HTTP
@@ -101,10 +103,9 @@ export class StreamableHttpServer extends BaseTransportServer {
 
     // Rate limiting middleware
     if (this.options.rateLimitConfig) {
-      // Give each live MCP session its own bucket; unknown or missing IDs fall back to the IP.
       this.rateLimiter = createRateLimitMiddleware({
-        isKnownSession: (sessionId) => this.getTransport(sessionId) !== undefined,
         ...this.options.rateLimitConfig,
+        resolveSessionId: (req: Request) => this.resolveRateLimitSession(req),
       })
       this.app.use(this.rateLimiter.middleware)
     }
@@ -115,23 +116,10 @@ export class StreamableHttpServer extends BaseTransportServer {
           return next()
         }
 
-        const headerName = this.options.authHeaderName ?? "x-mcp-token"
-        const headerToken = req.header(headerName)
-        const authorizationHeader = req.header("authorization")
-
-        const headerTokenValid = this.compareAuthTokens(headerToken)
-        const bearerTokenValid =
-          typeof authorizationHeader === "string" &&
-          authorizationHeader.startsWith("Bearer ") &&
-          this.compareAuthTokens(authorizationHeader.slice(7))
-
-        const hasValidToken = headerTokenValid || bearerTokenValid
-
-        if (!hasValidToken) {
+        if (!this.isAuthorized(req)) {
           return res.status(401).json({
             error: "Unauthorized",
-            message:
-              "Missing or invalid authentication token. Provide a valid auth header.",
+            message: "Missing or invalid authentication token. Provide a valid auth header.",
           })
         }
 
@@ -224,6 +212,39 @@ export class StreamableHttpServer extends BaseTransportServer {
         id: null,
       })
     })
+  }
+
+  /**
+   * True when no auth token is configured, or the request carries a valid one.
+   */
+  private isAuthorized(req: Request): boolean {
+    if (!this.options.authToken) {
+      return true
+    }
+
+    const headerName = this.options.authHeaderName ?? "x-mcp-token"
+    const authorizationHeader = req.header("authorization")
+
+    return (
+      this.compareAuthTokens(req.header(headerName)) ||
+      (typeof authorizationHeader === "string" &&
+        authorizationHeader.startsWith("Bearer ") &&
+        this.compareAuthTokens(authorizationHeader.slice(7)))
+    )
+  }
+
+  /**
+   * Session to rate-limit a request under, or `undefined` to limit it by client IP. A session
+   * bucket is used only for a live session, on an authorized request, from the client IP that
+   * created it, so nobody else can drain (or borrow) a session's quota with its ID.
+   */
+  private resolveRateLimitSession(req: Request): string | undefined {
+    const sessionId = req.header("mcp-session-id")
+    if (!sessionId || !this.getTransport(sessionId) || !this.isAuthorized(req)) {
+      return undefined
+    }
+
+    return this.sessionClientIps.get(sessionId) === req.ip ? sessionId : undefined
   }
 
   private compareAuthTokens(token: string | undefined): boolean {
@@ -342,7 +363,7 @@ export class StreamableHttpServer extends BaseTransportServer {
     const isInitialize = isInitializeRequest(req.body)
 
     if (isInitialize) {
-      const transport = await this.createNewSession()
+      const transport = await this.createNewSession(req.ip)
       await transport.handleRequest(req, res, req.body)
     } else {
       if (!sessionId) {
@@ -445,6 +466,7 @@ export class StreamableHttpServer extends BaseTransportServer {
     // Clean up rate limiter
     if (this.rateLimiter) {
       this.rateLimiter.limiter.destroy()
+      this.rateLimiter.ipLimiter.destroy()
     }
 
     // Close the HTTP server
@@ -468,7 +490,10 @@ export class StreamableHttpServer extends BaseTransportServer {
     console.error("HTTP server stopped successfully")
   }
 
-  public async createNewSession(): Promise<StreamableHTTPServerTransport> {
+  /**
+   * @param clientIp IP of the client creating the session; binds the session's rate-limit bucket
+   */
+  public async createNewSession(clientIp?: string): Promise<StreamableHTTPServerTransport> {
     if (Object.keys(this.transports).length >= this.options.maxConcurrentSessions!) {
       throw new TransportError(ErrorCode.SESSION_LIMIT_EXCEEDED, "Max concurrent sessions reached")
     }
@@ -477,6 +502,9 @@ export class StreamableHttpServer extends BaseTransportServer {
       sessionIdGenerator: () => randomUUID(),
       onsessioninitialized: (sid) => {
         this.transports[sid] = transport
+        if (clientIp) {
+          this.sessionClientIps.set(sid, clientIp)
+        }
         this.setupSessionTimeout(sid)
         this.emit("session-created", sid)
       },
@@ -501,9 +529,10 @@ export class StreamableHttpServer extends BaseTransportServer {
   }
 
   public cleanupSession(sessionId: string): void {
-    const transport = this.transports[sessionId]
+    const transport = this.getTransport(sessionId)
     if (transport) {
       delete this.transports[sessionId]
+      this.sessionClientIps.delete(sessionId)
       const timeout = this.sessionTimeouts.get(sessionId)
       if (timeout) {
         clearTimeout(timeout)

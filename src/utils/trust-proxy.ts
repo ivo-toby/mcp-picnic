@@ -1,3 +1,5 @@
+import express from "express"
+
 /**
  * Value accepted by Express's `trust proxy` setting: a boolean, a hop count, or a
  * comma-separated list of addresses, subnets and names such as `loopback`.
@@ -30,4 +32,21 @@ export function parseTrustProxy(value: string | undefined): TrustProxySetting | 
   }
 
   return trimmed
+}
+
+/**
+ * True when Express accepts the value as a `trust proxy` setting. Express compiles the setting
+ * eagerly and throws on invalid addresses (e.g. `yes`, `-1`, a space-separated list).
+ */
+export function isValidTrustProxy(value: TrustProxySetting | undefined): boolean {
+  if (value === undefined) {
+    return true
+  }
+
+  try {
+    express().set("trust proxy", value)
+    return true
+  } catch {
+    return false
+  }
 }

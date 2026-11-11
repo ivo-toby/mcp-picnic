@@ -2,7 +2,7 @@ import { z } from "zod"
 import path from "path"
 import os from "os"
 import dotenv from "dotenv"
-import { parseTrustProxy } from "./utils/trust-proxy.js"
+import { isValidTrustProxy, parseTrustProxy } from "./utils/trust-proxy.js"
 
 dotenv.config()
 
@@ -42,7 +42,11 @@ const configSchema = z.object({
     .refine((paths) => paths.every((path) => path.startsWith("/")), {
       message: "HTTP_RATE_LIMIT_SKIP_PATHS entries must start with '/'.",
     }),
-  HTTP_TRUST_PROXY: z.string().optional().transform(parseTrustProxy),
+  HTTP_RATE_LIMIT_MAX_REQUESTS_PER_IP: z.coerce.number().int().positive().optional(),
+  HTTP_TRUST_PROXY: z.string().optional().transform(parseTrustProxy).refine(isValidTrustProxy, {
+    message:
+      "HTTP_TRUST_PROXY must be true, false, a hop count, or a comma-separated list of addresses/subnets (e.g. loopback).",
+  }),
   PICNIC_SESSION_FILE: z.string().default(defaultSessionFile),
 })
 

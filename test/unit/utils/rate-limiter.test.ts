@@ -419,7 +419,7 @@ describe("createRateLimitMiddleware", () => {
 
       middleware(mockReq, mockRes, mockNext)
 
-      expect(limiter.getStatus("127.0.0.1")).not.toBeNull()
+      expect(limiter.getStatus("ip:127.0.0.1")).not.toBeNull()
 
       limiter.destroy()
     })
@@ -435,7 +435,7 @@ describe("createRateLimitMiddleware", () => {
       const reqWithoutIP = { connection: {} }
       middleware(reqWithoutIP, mockRes, mockNext)
 
-      expect(limiter.getStatus("unknown")).not.toBeNull()
+      expect(limiter.getStatus("ip:unknown")).not.toBeNull()
       expect(mockNext).toHaveBeenCalled()
 
       limiter.destroy()
@@ -525,7 +525,7 @@ describe("createRateLimitMiddleware", () => {
 
       expect(mockNext).toHaveBeenCalledTimes(3)
       expect(mockRes.set).not.toHaveBeenCalled()
-      expect(limiter.getStatus("127.0.0.1")).toBeNull()
+      expect(limiter.getStatus("ip:127.0.0.1")).toBeNull()
 
       // The MCP endpoint still has its full quota
       middleware({ ...mockReq, path: "/mcp" }, mockRes, mockNext)
@@ -546,7 +546,7 @@ describe("createRateLimitMiddleware", () => {
       middleware({ ...mockReq, path: "/healthz" }, mockRes, mockNext)
       middleware({ ...mockReq, path: "/health/details" }, mockRes, mockNext)
 
-      expect(limiter.getStatus("127.0.0.1")?.count).toBe(2)
+      expect(limiter.getStatus("ip:127.0.0.1")?.count).toBe(2)
 
       limiter.destroy()
     })
@@ -558,13 +558,13 @@ describe("createRateLimitMiddleware", () => {
       connection: {},
       header: (name: string) => (name === "mcp-session-id" ? sessionId : undefined),
     })
+    const fromHeader = (req: any) => req.header("mcp-session-id")
 
-    it("should give each known session its own bucket behind a shared IP", () => {
-      const known = new Set(["session-a", "session-b"])
-      const { middleware, limiter } = createRateLimitMiddleware({
+    it("should give each resolved session its own bucket behind a shared IP", () => {
+      const { middleware, limiter, ipLimiter } = createRateLimitMiddleware({
         windowMs: 60000,
         maxRequests: 1,
-        isKnownSession: (id) => known.has(id),
+        resolveSessionId: fromHeader,
       })
 
       middleware(sessionReq("127.0.0.1", "session-a"), mockRes, mockNext)
@@ -575,19 +575,20 @@ describe("createRateLimitMiddleware", () => {
       expect(mockRes.status).not.toHaveBeenCalled()
       expect(limiter.getStatus("session:session-a")?.count).toBe(1)
       expect(limiter.getStatus("session:session-b")?.count).toBe(1)
-      expect(limiter.getStatus("127.0.0.1")?.count).toBe(1)
+      expect(limiter.getStatus("ip:127.0.0.1")?.count).toBe(1)
 
       middleware(sessionReq("127.0.0.1", "session-a"), mockRes, mockNext)
       expect(mockRes.status).toHaveBeenCalledWith(429)
 
       limiter.destroy()
+      ipLimiter.destroy()
     })
 
-    it("should fall back to the IP for unknown session IDs", () => {
-      const { middleware, limiter } = createRateLimitMiddleware({
+    it("should limit by IP when no session is resolved", () => {
+      const { middleware, limiter, ipLimiter } = createRateLimitMiddleware({
         windowMs: 60000,
         maxRequests: 1,
-        isKnownSession: () => false,
+        resolveSessionId: () => undefined,
       })
 
       middleware(sessionReq("127.0.0.1", "made-up-1"), mockRes, mockNext)
@@ -596,13 +597,14 @@ describe("createRateLimitMiddleware", () => {
       expect(mockNext).toHaveBeenCalledTimes(1)
       expect(mockRes.status).toHaveBeenCalledWith(429)
       expect(limiter.getStatus("session:made-up-1")).toBeNull()
-      expect(limiter.getStatus("127.0.0.1")?.count).toBe(1)
+      expect(limiter.getStatus("ip:127.0.0.1")?.count).toBe(1)
 
       limiter.destroy()
+      ipLimiter.destroy()
     })
 
-    it("should ignore session IDs when no session lookup is configured", () => {
-      const { middleware, limiter } = createRateLimitMiddleware({
+    it("should ignore session IDs when no session resolver is configured", () => {
+      const { middleware, limiter, ipLimiter } = createRateLimitMiddleware({
         windowMs: 60000,
         maxRequests: 10,
       })
@@ -610,9 +612,57 @@ describe("createRateLimitMiddleware", () => {
       middleware(sessionReq("127.0.0.1", "session-a"), mockRes, mockNext)
 
       expect(limiter.getStatus("session:session-a")).toBeNull()
-      expect(limiter.getStatus("127.0.0.1")).not.toBeNull()
+      expect(limiter.getStatus("ip:127.0.0.1")).not.toBeNull()
 
       limiter.destroy()
+      ipLimiter.destroy()
+    })
+
+    it("should cap all requests from one IP across its sessions", () => {
+      const { middleware, limiter, ipLimiter } = createRateLimitMiddleware({
+        windowMs: 60000,
+        maxRequests: 2,
+        maxRequestsPerIp: 3,
+        resolveSessionId: fromHeader,
+      })
+
+      middleware(sessionReq("127.0.0.1", "session-a"), mockRes, mockNext)
+      middleware(sessionReq("127.0.0.1", "session-a"), mockRes, mockNext)
+      middleware(sessionReq("127.0.0.1", "session-b"), mockRes, mockNext)
+      expect(mockNext).toHaveBeenCalledTimes(3)
+
+      // session-b still has quota, but the IP's aggregate ceiling is spent.
+      middleware(sessionReq("127.0.0.1", "session-b"), mockRes, mockNext)
+      expect(mockNext).toHaveBeenCalledTimes(3)
+      expect(mockRes.status).toHaveBeenCalledWith(429)
+      expect(mockRes.set).toHaveBeenCalledWith(
+        expect.objectContaining({ "X-RateLimit-Limit": "3" }),
+      )
+
+      // Another IP is unaffected.
+      middleware(sessionReq("10.0.0.2", "session-c"), mockRes, mockNext)
+      expect(mockNext).toHaveBeenCalledTimes(4)
+
+      limiter.destroy()
+      ipLimiter.destroy()
+    })
+
+    it("should default the per-IP ceiling to 10x maxRequests", () => {
+      const { middleware, limiter, ipLimiter } = createRateLimitMiddleware({
+        windowMs: 60000,
+        maxRequests: 1,
+        resolveSessionId: fromHeader,
+      })
+
+      for (let i = 0; i < 11; i++) {
+        middleware(sessionReq("127.0.0.1", `session-${i}`), mockRes, mockNext)
+      }
+
+      expect(mockNext).toHaveBeenCalledTimes(10)
+      expect(ipLimiter.getStatus("ip:127.0.0.1")?.count).toBe(10)
+
+      limiter.destroy()
+      ipLimiter.destroy()
     })
   })
 
@@ -631,7 +681,7 @@ describe("createRateLimitMiddleware", () => {
 
       middleware(reqWithConnectionIP, mockRes, mockNext)
 
-      expect(limiter.getStatus("192.168.1.1")).not.toBeNull()
+      expect(limiter.getStatus("ip:192.168.1.1")).not.toBeNull()
       expect(mockNext).toHaveBeenCalled()
 
       limiter.destroy()
@@ -649,7 +699,7 @@ describe("createRateLimitMiddleware", () => {
 
       middleware(reqWithoutAnyIP, mockRes, mockNext)
 
-      expect(limiter.getStatus("unknown")).not.toBeNull()
+      expect(limiter.getStatus("ip:unknown")).not.toBeNull()
       expect(mockNext).toHaveBeenCalled()
 
       limiter.destroy()

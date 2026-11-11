@@ -244,16 +244,71 @@ describe("StreamableHttpServer", () => {
       return ((server.server as http.Server).address() as { port: number }).port
     }
 
-    it("should limit known sessions separately from the shared client IP", async () => {
-      const port = await startServer({ rateLimitConfig: { windowMs: 60000, maxRequests: 1 } })
-      // Register a live session directly; the SDK mock can't run a real initialize handshake.
+    /**
+     * Spend the client IP's own bucket with one session-less request and return the IP the
+     * server saw (IPv4 or IPv4-mapped IPv6, depending on how the socket was bound).
+     */
+    const spendIpBucket = async (port: number, headers: Record<string, string> = {}) => {
+      expect(await get(port, headers)).toBe(200)
       // @ts-expect-error - private property access
-      server.transports["test-session-id"] = { ...mockTransport }
+      const keys = [...server.rateLimiter.ipLimiter["store"].keys()] as string[]
+      return keys[0].replace(/^ip:/, "")
+    }
+
+    const registerSession = (id: string, clientIp: string) => {
+      // The SDK mock can't run a real initialize handshake, so register the session directly.
+      // @ts-expect-error - private property access
+      server.transports[id] = { ...mockTransport }
+      // @ts-expect-error - private property access
+      server.sessionClientIps.set(id, clientIp)
+    }
+
+    it("should limit live sessions separately from their client IP", async () => {
+      const port = await startServer({ rateLimitConfig: { windowMs: 60000, maxRequests: 1 } })
+      registerSession("test-session-id", await spendIpBucket(port))
 
       expect(await get(port, { "mcp-session-id": "test-session-id" })).toBe(200)
-      expect(await get(port)).toBe(200)
+      expect(await get(port)).toBe(429)
       expect(await get(port, { "mcp-session-id": "unknown-session" })).toBe(429)
       expect(await get(port, { "mcp-session-id": "test-session-id" })).toBe(429)
+    })
+
+    it("should not charge a session for requests from another client IP", async () => {
+      const port = await startServer({ rateLimitConfig: { windowMs: 60000, maxRequests: 1 } })
+      await spendIpBucket(port)
+      registerSession("test-session-id", "203.0.113.7")
+
+      // Same session ID, different IP: falls back to the (spent) IP bucket.
+      expect(await get(port, { "mcp-session-id": "test-session-id" })).toBe(429)
+      // @ts-expect-error - private property access
+      expect(server.rateLimiter.limiter.getStatus("session:test-session-id")).toBeNull()
+    })
+
+    it("should not charge a session for unauthenticated requests", async () => {
+      const port = await startServer({
+        authToken: "secret",
+        rateLimitConfig: { windowMs: 60000, maxRequests: 1 },
+      })
+      registerSession("test-session-id", await spendIpBucket(port, { "x-mcp-token": "secret" }))
+
+      // No token: limited on the (spent) IP bucket, never reaching the session bucket.
+      expect(await get(port, { "mcp-session-id": "test-session-id" })).toBe(429)
+      // @ts-expect-error - private property access
+      expect(server.rateLimiter.limiter.getStatus("session:test-session-id")).toBeNull()
+
+      // The session owner still has its full quota.
+      expect(
+        await get(port, { "mcp-session-id": "test-session-id", "x-mcp-token": "secret" }),
+      ).toBe(200)
+    })
+
+    it("should forget a session's client IP when the session ends", async () => {
+      const port = await startServer({ rateLimitConfig: { windowMs: 60000, maxRequests: 1 } })
+      registerSession("test-session-id", await spendIpBucket(port))
+      server.cleanupSession("test-session-id")
+
+      // @ts-expect-error - private property access
+      expect(server.sessionClientIps.has("test-session-id")).toBe(false)
     })
 
     it("should key on X-Forwarded-For when trustProxy is set", async () => {
@@ -273,6 +328,14 @@ describe("StreamableHttpServer", () => {
       expect(await get(port, { "X-Forwarded-For": "100.64.0.1" })).toBe(200)
       expect(await get(port, { "X-Forwarded-For": "100.64.0.2" })).toBe(429)
     })
+  })
+
+  it("should not resolve Object.prototype members as sessions", () => {
+    server = new StreamableHttpServer({ port: 0, enableRequestLogging: false })
+
+    expect(server.getTransport("constructor")).toBeUndefined()
+    expect(server.getTransport("__proto__")).toBeUndefined()
+    expect(() => server.cleanupSession("constructor")).not.toThrow()
   })
 
   it("should setup routes", async () => {

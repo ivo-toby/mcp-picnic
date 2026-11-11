@@ -9,12 +9,16 @@ export interface RateLimitConfig {
   skipFailedRequests?: boolean // Don't count failed requests
   keyGenerator?: (identifier: string) => string // Custom key generation
   /**
-   * Returns true when a `mcp-session-id` belongs to a live session. When provided, requests
-   * carrying a known session ID get their own bucket instead of sharing the client IP's, so
-   * clients behind one reverse proxy don't starve each other. Unknown IDs fall back to the IP,
-   * so a client can't mint fresh buckets by sending random session IDs.
+   * Returns the MCP session ID to rate-limit this request under, or `undefined` to limit it by
+   * client IP. Callers decide when a session bucket is legitimate (live session, authenticated,
+   * same client that created it), so a request can't be charged to someone else's session.
    */
-  isKnownSession?: (sessionId: string) => boolean
+  resolveSessionId?: (req: ANNIE) => string | undefined
+  /**
+   * Ceiling on all requests from one client IP across its sessions, so a client can't multiply
+   * its quota by opening sessions. Defaults to 10x `maxRequests`.
+   */
+  maxRequestsPerIp?: number
 }
 
 interface RateLimitEntry {
@@ -25,7 +29,7 @@ interface RateLimitEntry {
 
 export class RateLimiter {
   private store = new Map<string, RateLimitEntry>()
-  private config: Required<Omit<RateLimitConfig, "isKnownSession">>
+  private config: Required<Omit<RateLimitConfig, "resolveSessionId" | "maxRequestsPerIp">>
   private cleanupInterval: NodeJS.Timeout
 
   constructor(config: RateLimitConfig) {
@@ -213,27 +217,44 @@ function normalizePath(path: string): string {
   return (trimmed || "/").toLowerCase()
 }
 
-/**
- * Pick the rate-limit bucket for a request: its MCP session when the session is known,
- * otherwise the client IP (`req.ip` honours Express `trust proxy`).
- */
-function resolveIdentifier(req: ANNIE, isKnownSession?: (sessionId: string) => boolean): string {
-  if (isKnownSession && typeof req.header === "function") {
-    const sessionId = req.header("mcp-session-id")
-    if (typeof sessionId === "string" && sessionId.length > 0 && isKnownSession(sessionId)) {
-      return `session:${sessionId}`
-    }
-  }
-
+/** Client IP for a request; `req.ip` honours Express `trust proxy`. */
+function clientIp(req: ANNIE): string {
   return req.ip || req.connection?.remoteAddress || "unknown"
 }
 
 /**
- * Express middleware factory for rate limiting
+ * Express middleware factory for rate limiting.
+ *
+ * Every request counts against its client IP's aggregate bucket (`maxRequestsPerIp`). It then
+ * counts against a `maxRequests` bucket: its session's when `resolveSessionId` returns one,
+ * otherwise the IP's own.
  */
 export function createRateLimitMiddleware(config: RateLimitConfig) {
   const limiter = new RateLimiter(config)
+  const maxRequestsPerIp = config.maxRequestsPerIp ?? config.maxRequests * 10
+  const ipLimiter = new RateLimiter({ windowMs: config.windowMs, maxRequests: maxRequestsPerIp })
   const skipPaths = new Set((config.skipPaths ?? []).map(normalizePath))
+
+  const reject = (res: ANNIE, limit: number, resetTime?: number) => {
+    const retryAfter = resetTime ? Math.ceil((resetTime - Date.now()) / 1000) : 60
+    res.set({
+      "X-RateLimit-Limit": limit.toString(),
+      "X-RateLimit-Remaining": "0",
+      "X-RateLimit-Reset": resetTime ? Math.ceil(resetTime / 1000).toString() : "",
+    })
+    res.set("Retry-After", retryAfter.toString())
+
+    const error = new TransportError(ErrorCode.TRANSPORT_RATE_LIMITED, "Too many requests", {
+      retryAfter,
+      resetTime,
+    })
+
+    return res.status(429).json({
+      jsonrpc: "2.0",
+      error: error.toMCPError(),
+      id: null,
+    })
+  }
 
   return {
     middleware: (req: ANNIE, res: ANNIE, next: ANNIE) => {
@@ -245,34 +266,29 @@ export function createRateLimitMiddleware(config: RateLimitConfig) {
         return next()
       }
 
-      const identifier = resolveIdentifier(req, config.isKnownSession)
-      const result = limiter.checkLimit(identifier)
+      // Namespaced keys, so a spoofed IP (e.g. via `trust proxy = true`) can't collide with
+      // a session bucket.
+      const ipKey = `ip:${clientIp(req)}`
+      const aggregate = ipLimiter.checkLimit(ipKey)
+      if (!aggregate.allowed) {
+        return reject(res, maxRequestsPerIp, aggregate.resetTime)
+      }
 
-      // Add rate limit headers
+      const sessionId = config.resolveSessionId?.(req)
+      const result = limiter.checkLimit(sessionId ? `session:${sessionId}` : ipKey)
+      if (!result.allowed) {
+        return reject(res, config.maxRequests, result.resetTime)
+      }
+
       res.set({
         "X-RateLimit-Limit": config.maxRequests.toString(),
         "X-RateLimit-Remaining": (result.remaining || 0).toString(),
         "X-RateLimit-Reset": result.resetTime ? Math.ceil(result.resetTime / 1000).toString() : "",
       })
 
-      if (!result.allowed) {
-        const retryAfter = result.resetTime ? Math.ceil((result.resetTime - Date.now()) / 1000) : 60
-        res.set("Retry-After", retryAfter.toString())
-
-        const error = new TransportError(ErrorCode.TRANSPORT_RATE_LIMITED, "Too many requests", {
-          retryAfter,
-          resetTime: result.resetTime,
-        })
-
-        return res.status(429).json({
-          jsonrpc: "2.0",
-          error: error.toMCPError(),
-          id: null,
-        })
-      }
-
       next()
     },
     limiter,
+    ipLimiter,
   }
 }
