@@ -272,8 +272,8 @@ describe("StreamableHttpServer", () => {
       expect(await get(port, { "mcp-session-id": "test-session-id" })).toBe(429)
     })
 
-    it("should bind a session created via initialize to the caller's IP", async () => {
-      // Like the real SDK: the session is initialized while handling the initialize request.
+    /** Make the SDK mock initialize the session while handling the request, like the real SDK. */
+    const mockInitializingTransport = () =>
       vi.mocked(StreamableHTTPServerTransport).mockImplementationOnce((options: any) => {
         const transport: any = {
           sessionId: undefined,
@@ -287,8 +287,8 @@ describe("StreamableHttpServer", () => {
         return transport
       })
 
-      const port = await startServer({ rateLimitConfig: { windowMs: 60000, maxRequests: 2 } })
-      const status = await new Promise<number>((resolve, reject) => {
+    const postInitialize = (port: number, headers: Record<string, string> = {}) =>
+      new Promise<number>((resolve, reject) => {
         const req = http.request(
           {
             hostname: "127.0.0.1",
@@ -298,6 +298,7 @@ describe("StreamableHttpServer", () => {
             headers: {
               "Content-Type": "application/json",
               Accept: "application/json, text/event-stream",
+              ...headers,
             },
           },
           (response) => {
@@ -319,8 +320,12 @@ describe("StreamableHttpServer", () => {
           }),
         )
       })
-      expect(status).toBe(200)
 
+    it("should bind a session created via initialize to the caller's IP", async () => {
+      mockInitializingTransport()
+      const port = await startServer({ rateLimitConfig: { windowMs: 60000, maxRequests: 2 } })
+
+      expect(await postInitialize(port)).toBe(200)
       // @ts-expect-error - private property access
       expect(server.sessionClientIps.get("test-session-id")).toBe("127.0.0.1")
 
@@ -328,6 +333,30 @@ describe("StreamableHttpServer", () => {
       expect(await get(port, { "mcp-session-id": "test-session-id" })).toBe(200)
       // @ts-expect-error - private property access
       expect(server.rateLimiter.limiter.getStatus("session:test-session-id")?.count).toBe(1)
+    })
+
+    it("should keep initialize IP-limited when it carries a live session ID", async () => {
+      const port = await startServer({ rateLimitConfig: { windowMs: 60000, maxRequests: 1 } })
+      registerSession("existing-session", await spendIpBucket(port))
+      vi.mocked(StreamableHTTPServerTransport).mockClear()
+
+      // The session bucket has quota, but the IP bucket that pays for new sessions is spent.
+      expect(await postInitialize(port, { "mcp-session-id": "existing-session" })).toBe(429)
+      expect(StreamableHTTPServerTransport).not.toHaveBeenCalled()
+      expect(server.getActiveSessions()).toEqual(["existing-session"])
+    })
+
+    it("should charge both buckets for initialize sent with a live session ID", async () => {
+      mockInitializingTransport()
+      const port = await startServer({ rateLimitConfig: { windowMs: 60000, maxRequests: 5 } })
+      const ip = await spendIpBucket(port)
+      registerSession("existing-session", ip)
+
+      expect(await postInitialize(port, { "mcp-session-id": "existing-session" })).toBe(200)
+      // @ts-expect-error - private property access
+      const { limiter } = server.rateLimiter
+      expect(limiter.getStatus("session:existing-session")?.count).toBe(1)
+      expect(limiter.getStatus(`ip:${ip}`)?.count).toBe(2)
     })
 
     it("should not charge a session for requests from another client IP", async () => {

@@ -366,6 +366,15 @@ export class StreamableHttpServer extends BaseTransportServer {
     const isInitialize = isInitializeRequest(req.body)
 
     if (isInitialize) {
+      // Session creation stays IP-limited even when the request carried a live session ID (and
+      // was charged to that session), so a client can't mint sessions on session quota.
+      if (
+        this.rateLimiter &&
+        res.locals.rateLimitSessionId !== undefined &&
+        !this.rateLimiter.enforceIpLimit(req, res)
+      ) {
+        return
+      }
       const transport = await this.createNewSession(req.ip)
       await transport.handleRequest(req, res, req.body)
     } else {

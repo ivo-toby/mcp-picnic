@@ -298,6 +298,10 @@ export function createRateLimitMiddleware(config: RateLimitConfig) {
         return reject(res, config.maxRequests, result.resetTime)
       }
       ipLimiter.checkLimit(ipKey)
+      if (sessionId && res.locals) {
+        // Lets handlers tell this request was charged to a session, not its IP.
+        res.locals.rateLimitSessionId = sessionId
+      }
 
       res.set({
         "X-RateLimit-Limit": config.maxRequests.toString(),
@@ -306,6 +310,20 @@ export function createRateLimitMiddleware(config: RateLimitConfig) {
       })
 
       next()
+    },
+    /**
+     * Also charge a request to its client IP's own bucket, sending 429 when that bucket is
+     * spent. For requests the middleware already charged to a session bucket but that must stay
+     * IP-limited, such as `initialize`: otherwise each new session's bucket could pay for
+     * creating the next one. Returns false when a 429 was sent.
+     */
+    enforceIpLimit: (req: ANNIE, res: ANNIE): boolean => {
+      const result = limiter.checkLimit(`ip:${clientIp(req)}`)
+      if (!result.allowed) {
+        reject(res, config.maxRequests, result.resetTime)
+        return false
+      }
+      return true
     },
     limiter,
     ipLimiter,
