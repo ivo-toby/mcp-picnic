@@ -5,6 +5,7 @@ import {
   StreamableHttpServerOptions,
 } from "../../../src/transports/streamable-http"
 import { createMCPServer } from "../../../src/utils/server-factory"
+import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/streamableHttp.js"
 
 // Mock dependencies
 vi.mock("../../../src/utils/server-factory")
@@ -216,9 +217,7 @@ describe("StreamableHttpServer", () => {
       })
 
     await expect(Promise.all([checkHealth(), checkHealth(), checkHealth()])).resolves.toEqual([
-      200,
-      200,
-      200,
+      200, 200, 200,
     ])
   })
 
@@ -271,6 +270,64 @@ describe("StreamableHttpServer", () => {
       expect(await get(port)).toBe(429)
       expect(await get(port, { "mcp-session-id": "unknown-session" })).toBe(429)
       expect(await get(port, { "mcp-session-id": "test-session-id" })).toBe(429)
+    })
+
+    it("should bind a session created via initialize to the caller's IP", async () => {
+      // Like the real SDK: the session is initialized while handling the initialize request.
+      vi.mocked(StreamableHTTPServerTransport).mockImplementationOnce((options: any) => {
+        const transport: any = {
+          sessionId: undefined,
+          close: vi.fn().mockResolvedValue(undefined),
+          handleRequest: vi.fn(async (_req: any, res: any) => {
+            transport.sessionId = options.sessionIdGenerator()
+            options.onsessioninitialized(transport.sessionId)
+            res.status(200).json({ jsonrpc: "2.0", id: 1, result: {} })
+          }),
+        }
+        return transport
+      })
+
+      const port = await startServer({ rateLimitConfig: { windowMs: 60000, maxRequests: 2 } })
+      const status = await new Promise<number>((resolve, reject) => {
+        const req = http.request(
+          {
+            hostname: "127.0.0.1",
+            port,
+            path: "/mcp",
+            method: "POST",
+            headers: {
+              "Content-Type": "application/json",
+              Accept: "application/json, text/event-stream",
+            },
+          },
+          (response) => {
+            response.resume()
+            response.on("end", () => resolve(response.statusCode!))
+          },
+        )
+        req.on("error", reject)
+        req.end(
+          JSON.stringify({
+            jsonrpc: "2.0",
+            id: 1,
+            method: "initialize",
+            params: {
+              protocolVersion: "2025-06-18",
+              capabilities: {},
+              clientInfo: { name: "test", version: "1.0.0" },
+            },
+          }),
+        )
+      })
+      expect(status).toBe(200)
+
+      // @ts-expect-error - private property access
+      expect(server.sessionClientIps.get("test-session-id")).toBe("127.0.0.1")
+
+      // A follow-up request on that session lands in the session's bucket.
+      expect(await get(port, { "mcp-session-id": "test-session-id" })).toBe(200)
+      // @ts-expect-error - private property access
+      expect(server.rateLimiter.limiter.getStatus("session:test-session-id")?.count).toBe(1)
     })
 
     it("should not charge a session for requests from another client IP", async () => {

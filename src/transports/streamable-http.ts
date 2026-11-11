@@ -4,7 +4,7 @@ import cors from "cors"
 import { isInitializeRequest } from "@modelcontextprotocol/sdk/types.js"
 import { BaseTransportServer } from "./base.js"
 import { TransportError, ErrorCode, ErrorUtils } from "../types/errors.js"
-import { createRateLimitMiddleware, RateLimitConfig } from "../utils/rate-limiter.js"
+import { createRateLimitMiddleware, normalizeIp, RateLimitConfig } from "../utils/rate-limiter.js"
 import { randomUUID, timingSafeEqual } from "crypto"
 import { TrustProxySetting } from "../utils/trust-proxy.js"
 
@@ -244,7 +244,10 @@ export class StreamableHttpServer extends BaseTransportServer {
       return undefined
     }
 
-    return this.sessionClientIps.get(sessionId) === req.ip ? sessionId : undefined
+    const ownerIp = this.sessionClientIps.get(sessionId)
+    return ownerIp !== undefined && req.ip !== undefined && ownerIp === normalizeIp(req.ip)
+      ? sessionId
+      : undefined
   }
 
   private compareAuthTokens(token: string | undefined): boolean {
@@ -503,7 +506,7 @@ export class StreamableHttpServer extends BaseTransportServer {
       onsessioninitialized: (sid) => {
         this.transports[sid] = transport
         if (clientIp) {
-          this.sessionClientIps.set(sid, clientIp)
+          this.sessionClientIps.set(sid, normalizeIp(clientIp))
         }
         this.setupSessionTimeout(sid)
         this.emit("session-created", sid)

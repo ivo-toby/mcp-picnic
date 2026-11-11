@@ -405,13 +405,15 @@ HTTP_RATE_LIMIT_MAX_REQUESTS=100
 HTTP_RATE_LIMIT_SKIP_PATHS=/health
 # Each MCP session gets its own HTTP_RATE_LIMIT_MAX_REQUESTS bucket (only for authorized
 # requests from the IP that created the session); other requests share their client IP's.
-# All requests from one client IP are also capped in total (default: 10x MAX_REQUESTS).
+# Admitted requests from one client IP are also capped in total (default: 10x MAX_REQUESTS).
 # HTTP_RATE_LIMIT_MAX_REQUESTS_PER_IP=1000
 # Behind a reverse proxy (Tailscale Serve, nginx, Caddy, ...) every request comes from the
-# proxy's IP. Set Express's "trust proxy" so the client IP is read from X-Forwarded-For.
-# Prefer "loopback", a subnet list (10.0.0.0/8) or a hop count (1) over "true", which trusts
-# any X-Forwarded-For value. Unset = trust none. Only set this when a proxy you control sits
-# in front; otherwise clients can spoof their IP.
+# proxy's IP, so all clients share one IP bucket and one per-IP total. Set Express's
+# "trust proxy" so the real client IP is read from X-Forwarded-For. Use "loopback" or a
+# subnet list (e.g. loopback, 10.0.0.0/8) matching your proxy's address. A hop count (1) or
+# "true" trusts X-Forwarded-For from anyone who reaches the port directly, letting them
+# spoof their IP; only use those when the port is reachable solely through the proxy.
+# Unset = trust none.
 # HTTP_TRUST_PROXY=loopback
 
 # Session persistence (optional, strongly recommended in containers)

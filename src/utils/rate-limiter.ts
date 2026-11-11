@@ -45,6 +45,8 @@ export class RateLimiter {
     this.cleanupInterval = setInterval(() => {
       this.cleanup()
     }, 60000)
+    // Don't keep the process alive just for cleanup.
+    this.cleanupInterval.unref?.()
   }
 
   /**
@@ -98,6 +100,14 @@ export class RateLimiter {
       remaining: this.config.maxRequests - entry.count,
       resetTime: entry.resetTime,
     }
+  }
+
+  /**
+   * True when a request for this identifier would currently be allowed, without counting it.
+   */
+  wouldAllow(identifier: string): boolean {
+    const entry = this.store.get(this.config.keyGenerator(identifier))
+    return !entry || Date.now() >= entry.resetTime || entry.count < this.config.maxRequests
   }
 
   /**
@@ -217,17 +227,26 @@ function normalizePath(path: string): string {
   return (trimmed || "/").toLowerCase()
 }
 
+/**
+ * Normalize an IP so IPv4-mapped IPv6 (`::ffff:10.0.0.1`) and plain IPv4 (`10.0.0.1`) match.
+ */
+export function normalizeIp(ip: string): string {
+  return ip.toLowerCase().startsWith("::ffff:") && ip.includes(".") ? ip.slice(7) : ip
+}
+
 /** Client IP for a request; `req.ip` honours Express `trust proxy`. */
 function clientIp(req: ANNIE): string {
-  return req.ip || req.connection?.remoteAddress || "unknown"
+  const ip = req.ip || req.connection?.remoteAddress
+  return typeof ip === "string" && ip.length > 0 ? normalizeIp(ip) : "unknown"
 }
 
 /**
  * Express middleware factory for rate limiting.
  *
- * Every request counts against its client IP's aggregate bucket (`maxRequestsPerIp`). It then
- * counts against a `maxRequests` bucket: its session's when `resolveSessionId` returns one,
- * otherwise the IP's own.
+ * Each request counts against a `maxRequests` bucket: its session's when `resolveSessionId`
+ * returns one, otherwise its client IP's. Admitted requests also count against the IP's
+ * aggregate bucket (`maxRequestsPerIp`); rejected ones don't, so one client retrying on 429
+ * can't lock out other clients sharing its IP.
  */
 export function createRateLimitMiddleware(config: RateLimitConfig) {
   const limiter = new RateLimiter(config)
@@ -269,9 +288,8 @@ export function createRateLimitMiddleware(config: RateLimitConfig) {
       // Namespaced keys, so a spoofed IP (e.g. via `trust proxy = true`) can't collide with
       // a session bucket.
       const ipKey = `ip:${clientIp(req)}`
-      const aggregate = ipLimiter.checkLimit(ipKey)
-      if (!aggregate.allowed) {
-        return reject(res, maxRequestsPerIp, aggregate.resetTime)
+      if (!ipLimiter.wouldAllow(ipKey)) {
+        return reject(res, maxRequestsPerIp, ipLimiter.getStatus(ipKey)?.resetTime)
       }
 
       const sessionId = config.resolveSessionId?.(req)
@@ -279,6 +297,7 @@ export function createRateLimitMiddleware(config: RateLimitConfig) {
       if (!result.allowed) {
         return reject(res, config.maxRequests, result.resetTime)
       }
+      ipLimiter.checkLimit(ipKey)
 
       res.set({
         "X-RateLimit-Limit": config.maxRequests.toString(),

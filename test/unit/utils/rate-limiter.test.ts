@@ -2,6 +2,7 @@ import { describe, it, expect, beforeEach, afterEach, vi } from "vitest"
 import {
   RateLimiter,
   createRateLimitMiddleware,
+  normalizeIp,
   RateLimitConfig,
 } from "../../../src/utils/rate-limiter.js"
 import { TransportError, ErrorCode } from "../../../src/types/errors.js"
@@ -647,6 +648,45 @@ describe("createRateLimitMiddleware", () => {
       ipLimiter.destroy()
     })
 
+    it("should not charge the per-IP total for rejected requests", () => {
+      const { middleware, limiter, ipLimiter } = createRateLimitMiddleware({
+        windowMs: 60000,
+        maxRequests: 2,
+        maxRequestsPerIp: 5,
+        resolveSessionId: fromHeader,
+      })
+
+      // session-a exhausts its own bucket and keeps retrying.
+      for (let i = 0; i < 10; i++) {
+        middleware(sessionReq("127.0.0.1", "session-a"), mockRes, mockNext)
+      }
+      expect(mockNext).toHaveBeenCalledTimes(2)
+      expect(ipLimiter.getStatus("ip:127.0.0.1")?.count).toBe(2)
+
+      // Other sessions behind the same IP are unaffected.
+      middleware(sessionReq("127.0.0.1", "session-b"), mockRes, mockNext)
+      expect(mockNext).toHaveBeenCalledTimes(3)
+
+      limiter.destroy()
+      ipLimiter.destroy()
+    })
+
+    it("should treat IPv4-mapped IPv6 and IPv4 as the same client", () => {
+      const { middleware, limiter, ipLimiter } = createRateLimitMiddleware({
+        windowMs: 60000,
+        maxRequests: 1,
+      })
+
+      middleware(sessionReq("::ffff:100.64.0.1"), mockRes, mockNext)
+      middleware(sessionReq("100.64.0.1"), mockRes, mockNext)
+
+      expect(mockNext).toHaveBeenCalledTimes(1)
+      expect(limiter.getStatus("ip:100.64.0.1")?.count).toBe(1)
+
+      limiter.destroy()
+      ipLimiter.destroy()
+    })
+
     it("should default the per-IP ceiling to 10x maxRequests", () => {
       const { middleware, limiter, ipLimiter } = createRateLimitMiddleware({
         windowMs: 60000,
@@ -704,5 +744,18 @@ describe("createRateLimitMiddleware", () => {
 
       limiter.destroy()
     })
+  })
+})
+
+describe("normalizeIp", () => {
+  it("should strip the IPv4-mapped IPv6 prefix", () => {
+    expect(normalizeIp("::ffff:127.0.0.1")).toBe("127.0.0.1")
+    expect(normalizeIp("::FFFF:10.0.0.1")).toBe("10.0.0.1")
+  })
+
+  it("should leave plain IPv4 and IPv6 addresses alone", () => {
+    expect(normalizeIp("127.0.0.1")).toBe("127.0.0.1")
+    expect(normalizeIp("::1")).toBe("::1")
+    expect(normalizeIp("::ffff:abcd")).toBe("::ffff:abcd")
   })
 })
