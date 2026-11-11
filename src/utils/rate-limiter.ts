@@ -198,14 +198,28 @@ export class RateLimiter {
 }
 
 /**
+ * Normalize a request path the way Express routes it by default (case-insensitive,
+ * trailing slash optional), so `/health/` and `/HEALTH` match a `/health` skip entry.
+ */
+function normalizePath(path: string): string {
+  const trimmed = path.replace(/\/+$/, "")
+  return (trimmed || "/").toLowerCase()
+}
+
+/**
  * Express middleware factory for rate limiting
  */
 export function createRateLimitMiddleware(config: RateLimitConfig) {
   const limiter = new RateLimiter(config)
+  const skipPaths = new Set((config.skipPaths ?? []).map(normalizePath))
 
   return {
     middleware: (req: ANNIE, res: ANNIE, next: ANNIE) => {
-      if (config.skipPaths?.includes(req.path)) {
+      if (
+        skipPaths.size > 0 &&
+        typeof req.path === "string" &&
+        skipPaths.has(normalizePath(req.path))
+      ) {
         return next()
       }
 
