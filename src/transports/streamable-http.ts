@@ -6,6 +6,7 @@ import { BaseTransportServer } from "./base.js"
 import { TransportError, ErrorCode, ErrorUtils } from "../types/errors.js"
 import { createRateLimitMiddleware, RateLimitConfig } from "../utils/rate-limiter.js"
 import { randomUUID, timingSafeEqual } from "crypto"
+import { TrustProxySetting } from "../utils/trust-proxy.js"
 
 /**
  * Configuration options for the HTTP server
@@ -17,6 +18,11 @@ export interface StreamableHttpServerOptions {
   authHeaderName?: string
   corsOptions?: cors.CorsOptions
   rateLimitConfig?: RateLimitConfig
+  /**
+   * Express `trust proxy` setting. Set this when running behind a reverse proxy so `req.ip`
+   * (used for rate limiting and logging) comes from `X-Forwarded-For`. Unset trusts no proxy.
+   */
+  trustProxy?: TrustProxySetting
   requestTimeoutMs?: number
   maxRequestSizeBytes?: number
   enableRequestLogging?: boolean
@@ -59,6 +65,9 @@ export class StreamableHttpServer extends BaseTransportServer {
       ...options,
     }
     this.app = express()
+    if (this.options.trustProxy !== undefined) {
+      this.app.set("trust proxy", this.options.trustProxy)
+    }
 
     this.port = this.options.port!
     this.host = this.options.host!
@@ -92,7 +101,11 @@ export class StreamableHttpServer extends BaseTransportServer {
 
     // Rate limiting middleware
     if (this.options.rateLimitConfig) {
-      this.rateLimiter = createRateLimitMiddleware(this.options.rateLimitConfig)
+      // Give each live MCP session its own bucket; unknown or missing IDs fall back to the IP.
+      this.rateLimiter = createRateLimitMiddleware({
+        isKnownSession: (sessionId) => this.getTransport(sessionId) !== undefined,
+        ...this.options.rateLimitConfig,
+      })
       this.app.use(this.rateLimiter.middleware)
     }
 
@@ -483,7 +496,8 @@ export class StreamableHttpServer extends BaseTransportServer {
   }
 
   public getTransport(sessionId: string): StreamableHTTPServerTransport | undefined {
-    return this.transports[sessionId]
+    // Own-property check so IDs like "constructor" don't resolve to Object.prototype members.
+    return Object.hasOwn(this.transports, sessionId) ? this.transports[sessionId] : undefined
   }
 
   public cleanupSession(sessionId: string): void {

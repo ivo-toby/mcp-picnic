@@ -552,6 +552,70 @@ describe("createRateLimitMiddleware", () => {
     })
   })
 
+  describe("session-aware identifiers", () => {
+    const sessionReq = (ip: string, sessionId?: string) => ({
+      ip,
+      connection: {},
+      header: (name: string) => (name === "mcp-session-id" ? sessionId : undefined),
+    })
+
+    it("should give each known session its own bucket behind a shared IP", () => {
+      const known = new Set(["session-a", "session-b"])
+      const { middleware, limiter } = createRateLimitMiddleware({
+        windowMs: 60000,
+        maxRequests: 1,
+        isKnownSession: (id) => known.has(id),
+      })
+
+      middleware(sessionReq("127.0.0.1", "session-a"), mockRes, mockNext)
+      middleware(sessionReq("127.0.0.1", "session-b"), mockRes, mockNext)
+      middleware(sessionReq("127.0.0.1"), mockRes, mockNext)
+
+      expect(mockNext).toHaveBeenCalledTimes(3)
+      expect(mockRes.status).not.toHaveBeenCalled()
+      expect(limiter.getStatus("session:session-a")?.count).toBe(1)
+      expect(limiter.getStatus("session:session-b")?.count).toBe(1)
+      expect(limiter.getStatus("127.0.0.1")?.count).toBe(1)
+
+      middleware(sessionReq("127.0.0.1", "session-a"), mockRes, mockNext)
+      expect(mockRes.status).toHaveBeenCalledWith(429)
+
+      limiter.destroy()
+    })
+
+    it("should fall back to the IP for unknown session IDs", () => {
+      const { middleware, limiter } = createRateLimitMiddleware({
+        windowMs: 60000,
+        maxRequests: 1,
+        isKnownSession: () => false,
+      })
+
+      middleware(sessionReq("127.0.0.1", "made-up-1"), mockRes, mockNext)
+      middleware(sessionReq("127.0.0.1", "made-up-2"), mockRes, mockNext)
+
+      expect(mockNext).toHaveBeenCalledTimes(1)
+      expect(mockRes.status).toHaveBeenCalledWith(429)
+      expect(limiter.getStatus("session:made-up-1")).toBeNull()
+      expect(limiter.getStatus("127.0.0.1")?.count).toBe(1)
+
+      limiter.destroy()
+    })
+
+    it("should ignore session IDs when no session lookup is configured", () => {
+      const { middleware, limiter } = createRateLimitMiddleware({
+        windowMs: 60000,
+        maxRequests: 10,
+      })
+
+      middleware(sessionReq("127.0.0.1", "session-a"), mockRes, mockNext)
+
+      expect(limiter.getStatus("session:session-a")).toBeNull()
+      expect(limiter.getStatus("127.0.0.1")).not.toBeNull()
+
+      limiter.destroy()
+    })
+  })
+
   describe("edge cases", () => {
     it("should handle connection.remoteAddress fallback", () => {
       const config: RateLimitConfig = {

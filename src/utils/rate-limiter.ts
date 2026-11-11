@@ -8,6 +8,13 @@ export interface RateLimitConfig {
   skipSuccessfulRequests?: boolean // Don't count successful requests
   skipFailedRequests?: boolean // Don't count failed requests
   keyGenerator?: (identifier: string) => string // Custom key generation
+  /**
+   * Returns true when a `mcp-session-id` belongs to a live session. When provided, requests
+   * carrying a known session ID get their own bucket instead of sharing the client IP's, so
+   * clients behind one reverse proxy don't starve each other. Unknown IDs fall back to the IP,
+   * so a client can't mint fresh buckets by sending random session IDs.
+   */
+  isKnownSession?: (sessionId: string) => boolean
 }
 
 interface RateLimitEntry {
@@ -18,7 +25,7 @@ interface RateLimitEntry {
 
 export class RateLimiter {
   private store = new Map<string, RateLimitEntry>()
-  private config: Required<RateLimitConfig>
+  private config: Required<Omit<RateLimitConfig, "isKnownSession">>
   private cleanupInterval: NodeJS.Timeout
 
   constructor(config: RateLimitConfig) {
@@ -207,6 +214,21 @@ function normalizePath(path: string): string {
 }
 
 /**
+ * Pick the rate-limit bucket for a request: its MCP session when the session is known,
+ * otherwise the client IP (`req.ip` honours Express `trust proxy`).
+ */
+function resolveIdentifier(req: ANNIE, isKnownSession?: (sessionId: string) => boolean): string {
+  if (isKnownSession && typeof req.header === "function") {
+    const sessionId = req.header("mcp-session-id")
+    if (typeof sessionId === "string" && sessionId.length > 0 && isKnownSession(sessionId)) {
+      return `session:${sessionId}`
+    }
+  }
+
+  return req.ip || req.connection?.remoteAddress || "unknown"
+}
+
+/**
  * Express middleware factory for rate limiting
  */
 export function createRateLimitMiddleware(config: RateLimitConfig) {
@@ -223,8 +245,7 @@ export function createRateLimitMiddleware(config: RateLimitConfig) {
         return next()
       }
 
-      // Use IP address as default identifier, but allow custom extraction
-      const identifier = req.ip || req.connection.remoteAddress || "unknown"
+      const identifier = resolveIdentifier(req, config.isKnownSession)
       const result = limiter.checkLimit(identifier)
 
       // Add rate limit headers

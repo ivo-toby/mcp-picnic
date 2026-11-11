@@ -222,6 +222,59 @@ describe("StreamableHttpServer", () => {
     ])
   })
 
+  describe("rate limit identity", () => {
+    const get = (port: number, headers: Record<string, string> = {}) =>
+      new Promise<number>((resolve, reject) => {
+        const req = http.request(
+          { hostname: "127.0.0.1", port, path: "/sessions", method: "GET", headers },
+          (response) => {
+            response.resume()
+            response.on("end", () => resolve(response.statusCode!))
+          },
+        )
+        req.on("error", reject)
+        req.end()
+      })
+
+    const startServer = async (options: StreamableHttpServerOptions) => {
+      vi.useRealTimers()
+      server = new StreamableHttpServer({ port: 0, enableRequestLogging: false, ...options })
+      await server.start()
+      // @ts-expect-error - private property access
+      return ((server.server as http.Server).address() as { port: number }).port
+    }
+
+    it("should limit known sessions separately from the shared client IP", async () => {
+      const port = await startServer({ rateLimitConfig: { windowMs: 60000, maxRequests: 1 } })
+      // Register a live session directly; the SDK mock can't run a real initialize handshake.
+      // @ts-expect-error - private property access
+      server.transports["test-session-id"] = { ...mockTransport }
+
+      expect(await get(port, { "mcp-session-id": "test-session-id" })).toBe(200)
+      expect(await get(port)).toBe(200)
+      expect(await get(port, { "mcp-session-id": "unknown-session" })).toBe(429)
+      expect(await get(port, { "mcp-session-id": "test-session-id" })).toBe(429)
+    })
+
+    it("should key on X-Forwarded-For when trustProxy is set", async () => {
+      const port = await startServer({
+        trustProxy: "loopback",
+        rateLimitConfig: { windowMs: 60000, maxRequests: 1 },
+      })
+
+      expect(await get(port, { "X-Forwarded-For": "100.64.0.1" })).toBe(200)
+      expect(await get(port, { "X-Forwarded-For": "100.64.0.2" })).toBe(200)
+      expect(await get(port, { "X-Forwarded-For": "100.64.0.1" })).toBe(429)
+    })
+
+    it("should ignore X-Forwarded-For when trustProxy is not set", async () => {
+      const port = await startServer({ rateLimitConfig: { windowMs: 60000, maxRequests: 1 } })
+
+      expect(await get(port, { "X-Forwarded-For": "100.64.0.1" })).toBe(200)
+      expect(await get(port, { "X-Forwarded-For": "100.64.0.2" })).toBe(429)
+    })
+  })
+
   it("should setup routes", async () => {
     vi.useRealTimers()
     server = new StreamableHttpServer({ port: 0, enableRequestLogging: false })
