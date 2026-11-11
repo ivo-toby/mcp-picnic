@@ -111,6 +111,16 @@ export class RateLimiter {
   }
 
   /**
+   * Undo one counted request in the current window, for requests rejected after being counted.
+   */
+  refund(identifier: string): void {
+    const entry = this.store.get(this.config.keyGenerator(identifier))
+    if (entry && Date.now() < entry.resetTime && entry.count > 0) {
+      entry.count--
+    }
+  }
+
+  /**
    * Record a request (for post-processing rate limiting)
    */
   recordRequest(identifier: string, wasSuccessful: boolean = true) {
@@ -298,8 +308,9 @@ export function createRateLimitMiddleware(config: RateLimitConfig) {
         return reject(res, config.maxRequests, result.resetTime)
       }
       ipLimiter.checkLimit(ipKey)
-      if (sessionId && res.locals) {
+      if (sessionId) {
         // Lets handlers tell this request was charged to a session, not its IP.
+        res.locals = res.locals ?? {}
         res.locals.rateLimitSessionId = sessionId
       }
 
@@ -315,11 +326,18 @@ export function createRateLimitMiddleware(config: RateLimitConfig) {
      * Also charge a request to its client IP's own bucket, sending 429 when that bucket is
      * spent. For requests the middleware already charged to a session bucket but that must stay
      * IP-limited, such as `initialize`: otherwise each new session's bucket could pay for
-     * creating the next one. Returns false when a 429 was sent.
+     * creating the next one. Returns false when a 429 was sent; the session and per-IP total
+     * charges the middleware made are then refunded, since rejected requests don't count.
      */
     enforceIpLimit: (req: ANNIE, res: ANNIE): boolean => {
-      const result = limiter.checkLimit(`ip:${clientIp(req)}`)
+      const ipKey = `ip:${clientIp(req)}`
+      const result = limiter.checkLimit(ipKey)
       if (!result.allowed) {
+        const sessionId = res.locals?.rateLimitSessionId
+        if (sessionId) {
+          limiter.refund(`session:${sessionId}`)
+        }
+        ipLimiter.refund(ipKey)
         reject(res, config.maxRequests, result.resetTime)
         return false
       }

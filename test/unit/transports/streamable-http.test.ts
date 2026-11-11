@@ -341,9 +341,18 @@ describe("StreamableHttpServer", () => {
       vi.mocked(StreamableHTTPServerTransport).mockClear()
 
       // The session bucket has quota, but the IP bucket that pays for new sessions is spent.
+      // @ts-expect-error - private property access
+      const { limiter, ipLimiter } = server.rateLimiter
+      const ip = (ipLimiter["store"].keys().next().value as string).replace(/^ip:/, "")
+      const aggregateBefore = ipLimiter.getStatus(`ip:${ip}`)?.count
+
       expect(await postInitialize(port, { "mcp-session-id": "existing-session" })).toBe(429)
       expect(StreamableHTTPServerTransport).not.toHaveBeenCalled()
       expect(server.getActiveSessions()).toEqual(["existing-session"])
+
+      // The rejected initialize is refunded: it consumes neither the session nor the per-IP total.
+      expect(limiter.getStatus("session:existing-session")?.count).toBe(0)
+      expect(ipLimiter.getStatus(`ip:${ip}`)?.count).toBe(aggregateBefore)
     })
 
     it("should charge both buckets for initialize sent with a live session ID", async () => {

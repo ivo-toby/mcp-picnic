@@ -174,6 +174,26 @@ describe("RateLimiter", () => {
     })
   })
 
+  describe("refund", () => {
+    it("should undo one counted request in the current window", () => {
+      rateLimiter.checkLimit("user1")
+      rateLimiter.checkLimit("user1")
+      rateLimiter.refund("user1")
+
+      expect(rateLimiter.getStatus("user1")?.count).toBe(1)
+    })
+
+    it("should not go below zero or touch unknown identifiers", () => {
+      rateLimiter.checkLimit("user1")
+      rateLimiter.refund("user1")
+      rateLimiter.refund("user1")
+      rateLimiter.refund("user2")
+
+      expect(rateLimiter.getStatus("user1")?.count).toBe(0)
+      expect(rateLimiter.getStatus("user2")).toBeNull()
+    })
+  })
+
   describe("getStatus", () => {
     it("should return null for unknown identifier", () => {
       const status = rateLimiter.getStatus("unknown")
