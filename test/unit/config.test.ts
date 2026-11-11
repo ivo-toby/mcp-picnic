@@ -27,6 +27,18 @@ describe("Config Schema - PICNIC_COUNTRY_CODE (Issue #10 regression)", () => {
     HTTP_HOST: z.string().default("localhost"),
     HTTP_AUTH_TOKEN: z.string().optional(),
     HTTP_AUTH_HEADER_NAME: z.string().default("x-mcp-token"),
+    HTTP_RATE_LIMIT_WINDOW_MS: z.coerce.number().int().positive().default(15 * 60 * 1000),
+    HTTP_RATE_LIMIT_MAX_REQUESTS: z.coerce.number().int().positive().default(100),
+    HTTP_RATE_LIMIT_SKIP_PATHS: z
+      .string()
+      .default("/health")
+      .transform((value) =>
+        value
+          .split(",")
+          .map((path) => path.trim())
+          .filter(Boolean),
+      )
+      .refine((paths) => paths.every((path) => path.startsWith("/"))),
   })
 
   describe("PICNIC_COUNTRY_CODE validation", () => {
@@ -183,6 +195,49 @@ describe("Config Schema - PICNIC_COUNTRY_CODE (Issue #10 regression)", () => {
       })
 
       expect(result.HTTP_AUTH_HEADER_NAME).toBe("x-mcp-token")
+    })
+
+    it("should default the HTTP rate-limit policy", () => {
+      const result = configSchema.parse({
+        PICNIC_USERNAME: "test-user",
+        PICNIC_PASSWORD: "test-pass",
+      })
+
+      expect(result.HTTP_RATE_LIMIT_WINDOW_MS).toBe(15 * 60 * 1000)
+      expect(result.HTTP_RATE_LIMIT_MAX_REQUESTS).toBe(100)
+      expect(result.HTTP_RATE_LIMIT_SKIP_PATHS).toEqual(["/health"])
+    })
+
+    it("should parse custom HTTP rate-limit settings", () => {
+      const result = configSchema.parse({
+        PICNIC_USERNAME: "test-user",
+        PICNIC_PASSWORD: "test-pass",
+        HTTP_RATE_LIMIT_WINDOW_MS: "60000",
+        HTTP_RATE_LIMIT_MAX_REQUESTS: "25",
+        HTTP_RATE_LIMIT_SKIP_PATHS: "/health, /metrics",
+      })
+
+      expect(result.HTTP_RATE_LIMIT_WINDOW_MS).toBe(60000)
+      expect(result.HTTP_RATE_LIMIT_MAX_REQUESTS).toBe(25)
+      expect(result.HTTP_RATE_LIMIT_SKIP_PATHS).toEqual(["/health", "/metrics"])
+    })
+
+    it("should reject invalid HTTP rate-limit settings", () => {
+      expect(() =>
+        configSchema.parse({
+          PICNIC_USERNAME: "test-user",
+          PICNIC_PASSWORD: "test-pass",
+          HTTP_RATE_LIMIT_MAX_REQUESTS: "0",
+        }),
+      ).toThrow()
+
+      expect(() =>
+        configSchema.parse({
+          PICNIC_USERNAME: "test-user",
+          PICNIC_PASSWORD: "test-pass",
+          HTTP_RATE_LIMIT_SKIP_PATHS: "health",
+        }),
+      ).toThrow()
     })
   })
 })

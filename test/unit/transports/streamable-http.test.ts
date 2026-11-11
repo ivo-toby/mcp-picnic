@@ -189,6 +189,39 @@ describe("StreamableHttpServer", () => {
     )
   })
 
+  it("should not rate limit health checks", async () => {
+    vi.useRealTimers()
+    server = new StreamableHttpServer({
+      port: 0,
+      enableRequestLogging: false,
+      rateLimitConfig: { windowMs: 60000, maxRequests: 1, skipPaths: ["/health"] },
+    })
+    await server.start()
+
+    // @ts-expect-error - private property access
+    const httpServer = server.server as http.Server
+    const address = httpServer.address() as { port: number }
+
+    const checkHealth = () =>
+      new Promise<number>((resolve, reject) => {
+        const req = http.request(
+          { hostname: "127.0.0.1", port: address.port, path: "/health", method: "GET" },
+          (response) => {
+            response.resume()
+            response.on("end", () => resolve(response.statusCode!))
+          },
+        )
+        req.on("error", reject)
+        req.end()
+      })
+
+    await expect(Promise.all([checkHealth(), checkHealth(), checkHealth()])).resolves.toEqual([
+      200,
+      200,
+      200,
+    ])
+  })
+
   it("should setup routes", async () => {
     vi.useRealTimers()
     server = new StreamableHttpServer({ port: 0, enableRequestLogging: false })

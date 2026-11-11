@@ -27,6 +27,20 @@ const configSchema = z.object({
   HTTP_HOST: z.string().default("localhost"),
   HTTP_AUTH_TOKEN: z.string().optional(),
   HTTP_AUTH_HEADER_NAME: z.string().default("x-mcp-token"),
+  HTTP_RATE_LIMIT_WINDOW_MS: z.coerce.number().int().positive().default(15 * 60 * 1000),
+  HTTP_RATE_LIMIT_MAX_REQUESTS: z.coerce.number().int().positive().default(100),
+  HTTP_RATE_LIMIT_SKIP_PATHS: z
+    .string()
+    .default("/health")
+    .transform((value) =>
+      value
+        .split(",")
+        .map((path) => path.trim())
+        .filter(Boolean),
+    )
+    .refine((paths) => paths.every((path) => path.startsWith("/")), {
+      message: "HTTP_RATE_LIMIT_SKIP_PATHS entries must start with '/'.",
+    }),
   PICNIC_SESSION_FILE: z.string().default(defaultSessionFile),
 })
 

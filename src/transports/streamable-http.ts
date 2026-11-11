@@ -50,7 +50,7 @@ export class StreamableHttpServer extends BaseTransportServer {
       host: "localhost",
       authHeaderName: "x-mcp-token",
       corsOptions: { origin: "*" },
-      rateLimitConfig: { windowMs: 15 * 60 * 1000, maxRequests: 100 },
+      rateLimitConfig: { windowMs: 15 * 60 * 1000, maxRequests: 100, skipPaths: ["/health"] },
       requestTimeoutMs: 10000,
       maxRequestSizeBytes: 1024 * 1024 * 10, // 10MB
       enableRequestLogging: true,

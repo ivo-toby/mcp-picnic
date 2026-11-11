@@ -4,6 +4,7 @@ import { TransportError, ErrorCode } from "../types/errors.js"
 export interface RateLimitConfig {
   windowMs: number // Time window in milliseconds
   maxRequests: number // Maximum requests per window
+  skipPaths?: string[] // Request paths excluded from rate limiting
   skipSuccessfulRequests?: boolean // Don't count successful requests
   skipFailedRequests?: boolean // Don't count failed requests
   keyGenerator?: (identifier: string) => string // Custom key generation
@@ -22,6 +23,7 @@ export class RateLimiter {
 
   constructor(config: RateLimitConfig) {
     this.config = {
+      skipPaths: [],
       skipSuccessfulRequests: false,
       skipFailedRequests: false,
       keyGenerator: (id: string) => id,
@@ -203,6 +205,10 @@ export function createRateLimitMiddleware(config: RateLimitConfig) {
 
   return {
     middleware: (req: ANNIE, res: ANNIE, next: ANNIE) => {
+      if (config.skipPaths?.includes(req.path)) {
+        return next()
+      }
+
       // Use IP address as default identifier, but allow custom extraction
       const identifier = req.ip || req.connection.remoteAddress || "unknown"
       const result = limiter.checkLimit(identifier)
