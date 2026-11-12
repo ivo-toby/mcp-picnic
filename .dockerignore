@@ -7,3 +7,6 @@ coverage
 .env.*
 *.log
 README.md
+data
+picnic-session.json
+picnic-device.json

@@ -1,5 +1,12 @@
 [![MseeP.ai Security Assessment Badge](https://mseep.net/pr/ivo-toby-mcp-picnic-badge.png)](https://mseep.ai/app/ivo-toby-mcp-picnic)
 
+> **Docker deployments:** choose the standalone HTTP server (`docker-compose.yml`)
+> or OpenAI Secure MCP Tunnel (`docker-compose.tunnel.yml`). Read the tunnel setup
+> guide in [English](docs/docker-openai-tunnel.en.md),
+> [Nederlands](docs/docker-openai-tunnel.nl.md),
+> [Français](docs/docker-openai-tunnel.fr.md), or
+> [Deutsch](docs/docker-openai-tunnel.de.md).
+
 # MCP Picnic - AI-Powered Grocery Shopping Assistant
 
 [![smithery badge](https://smithery.ai/badge/@ivo-toby/mcp-picnic)](https://smithery.ai/server/@ivo-toby/mcp-picnic)
@@ -337,25 +344,43 @@ npm link
 
 ### Option 3: Docker / Docker Compose
 
+Create the configuration once, then fill it in:
+
 ```bash
-# 1) Create .env with your Picnic credentials
-cat > .env <<EOF
-PICNIC_USERNAME=your-picnic-email@example.com
-PICNIC_PASSWORD=your-picnic-password
-PICNIC_COUNTRY_CODE=NL
-EOF
+cp .env.example .env
+chmod 600 .env
+```
 
-# 2) Build and start
-docker compose up -d --build
+Choose one of these Docker transports:
 
-# 3) Check health
-docker compose ps
+**Standalone HTTP MCP server** — runs the server directly, without OpenAI's
+tunnel. Set `HTTP_AUTH_TOKEN` in `.env` (generate a value with
+`openssl rand -hex 32`), then run:
+
+```bash
+docker compose up -d
 curl http://localhost:3000/health
 ```
 
+**OpenAI Secure MCP Tunnel** — use this to connect the MCP server to ChatGPT.
+In addition to the Picnic credentials, set `CONTROL_PLANE_TUNNEL_ID` and
+`CONTROL_PLANE_API_KEY` in `.env`, then run:
+
+```bash
+docker compose -f docker-compose.tunnel.yml up -d --build
+curl http://localhost:8091/readyz
+```
+
 Notes:
-- The container runs as a non-root user (UID `1638`).
-- Session persistence is configured via volume `picnic-data` mapped to `/app/data`.
+- The standalone HTTP Compose file uses the published image. Its MCP endpoint is
+  available on port `3000`; `HTTP_AUTH_TOKEN` protects all HTTP endpoints except
+  `/health`.
+- The tunnel Compose file builds the Picnic STDIO server from this checkout and
+  runs it with the official OpenAI Secure MCP Tunnel client. See the
+  [English setup guide](docs/docker-openai-tunnel.en.md).
+- The tunnel container runs as a non-root user (UID `1000`).
+- Both deployments persist session data in the `picnic-data` volume mounted at
+  `/app/data`.
 - `PICNIC_SESSION_FILE` defaults to `/app/data/picnic-session.json` in the container.
 - `PICNIC_DEVICE_FILE` defaults to `/app/data/picnic-device.json` in the container, so a generated device id is persisted on the same volume and reused across restarts.
 

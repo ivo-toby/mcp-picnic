@@ -1,0 +1,34 @@
+services:
+  mcp-picnic:
+    image: mcp-picnic:tunnel
+    build:
+      context: .
+      dockerfile: Dockerfile.tunnel
+    restart: unless-stopped
+    env_file:
+      - .env
+    environment:
+      ENABLE_HTTP_SERVER: "false"
+      PICNIC_SESSION_FILE: /app/data/picnic-session.json
+      PICNIC_DEVICE_FILE: /app/data/picnic-device.json
+    volumes:
+      - picnic-data:/app/data
+    ports:
+      - '127.0.0.1:${TUNNEL_UI_PORT:-8091}:8080'
+    init: true
+    read_only: true
+    tmpfs:
+      - /tmp:size=64m,mode=1777
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    stop_grace_period: 20s
+    logging:
+      driver: json-file
+      options:
+        max-size: '10m'
+        max-file: '3'
+
+volumes:
+  picnic-data:
